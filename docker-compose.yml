@@ -1,0 +1,50 @@
+services:
+  school_bus_db:
+    image: postgres:13
+    container_name: school_bus_db
+    restart: always
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    container_name: school_bus_redis
+    restart: always
+    ports:
+      - "6379:6379"
+
+  school_bus_web:
+    build: .
+    container_name: school_bus_web
+    restart: always
+    command: >
+      sh -c "until pg_isready -h school_bus_db -U ${POSTGRES_USER} -d ${POSTGRES_DB}; do echo 'Waiting for DB'; sleep 2; done;
+             cd /app/app/migrations;
+             alembic upgrade head;
+             cd /app;
+             uvicorn app.main:app --host 0.0.0.0 --port 8000"
+    volumes:
+      - .:/app
+    ports:
+      - "8000:8000"
+    depends_on:
+      school_bus_db:
+        condition: service_healthy
+      redis:
+        condition: service_started
+    env_file:
+      - .env
+
+volumes:
+  postgres_data:
