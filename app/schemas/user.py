@@ -28,6 +28,7 @@ class UserUpdate(BaseModel):
     last_name: Optional[str] = None
     phone: Optional[str] = None
     is_active: Optional[bool] = None
+    school_id: Optional[int] = None
     license_number: Optional[str] = None
     license_expiry: Optional[date] = None
     assigned_students: Optional[List[int]] = []

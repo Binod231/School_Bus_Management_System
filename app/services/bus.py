@@ -2,19 +2,31 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, update, delete, func
 from sqlalchemy.orm import selectinload
 from app.models.bus import Bus, BusRoute, BusStop, BusRouteStop, BusDriver
-from app.core.exceptions import NotFoundException, DatabaseException
+from app.schemas.bus import BusCreate, BusUpdate, BusRouteCreate, BusRouteUpdate
+from app.core.exceptions import NotFoundException
 from typing import Optional, List
 from app.core.cache import redis_client
 import json
+from datetime import datetime
+
+# Helper to serialize Bus objects, handling datetime
+def bus_serializer(bus: Bus) -> dict:
+    bus_dict = {c.name: getattr(bus, c.name) for c in bus.__table__.columns}
+    for key, value in bus_dict.items():
+        if isinstance(value, datetime):
+            bus_dict[key] = value.isoformat()
+    return bus_dict
 
 async def get_bus_by_id(db: AsyncSession, bus_id: int) -> Bus:
     """Get bus by ID"""
     cache_key = f"bus:{bus_id}"
     cached_bus = await redis_client.get(cache_key)
     if cached_bus:
-        # The data is stored as a JSON string, so we need to parse it
         bus_data = json.loads(cached_bus)
-        # We need to convert the string back to a Bus object
+        # Convert isoformat strings back to datetime objects
+        for key in ['created_at', 'updated_at']:
+            if bus_data.get(key):
+                bus_data[key] = datetime.fromisoformat(bus_data[key])
         return Bus(**bus_data)
 
     result = await db.execute(select(Bus).where(Bus.id == bus_id))
@@ -22,9 +34,7 @@ async def get_bus_by_id(db: AsyncSession, bus_id: int) -> Bus:
     if not bus:
         raise NotFoundException("Bus", bus_id)
     
-    # We need a way to serialize the SQLAlchemy model to a dictionary
-    # to store it in Redis.
-    await redis_client.set(cache_key, json.dumps(bus.to_dict()), ex=3600)
+    await redis_client.set(cache_key, json.dumps(bus_serializer(bus)), ex=3600)
     return bus
 
 
@@ -36,19 +46,17 @@ async def get_buses(
 ) -> List[Bus]:
     """Get buses with optional school filter"""
     query = select(Bus)
-
     if school_id is not None:
         query = query.where(Bus.school_id == school_id)
-
     query = query.offset(skip).limit(limit)
-
     result = await db.execute(query)
     return result.scalars().all()
 
 
-async def create_bus(db: AsyncSession, bus_data: dict) -> Bus:
+async def create_bus(db: AsyncSession, bus_data: BusCreate) -> Bus:
     """Create a new bus"""
-    db_bus = Bus(**bus_data)
+    # FIX: Convert the Pydantic model to a dictionary
+    db_bus = Bus(**bus_data.dict())
     db.add(db_bus)
     await db.commit()
     await db.refresh(db_bus)
@@ -68,7 +76,6 @@ async def update_bus(db: AsyncSession, bus_id: int, bus_data: dict) -> Bus:
     if not updated_bus:
         raise NotFoundException("Bus", bus_id)
     
-    # Invalidate the cache for the updated bus
     await redis_client.delete(f"bus:{bus_id}")
     return updated_bus
 
@@ -80,25 +87,16 @@ async def delete_bus(db: AsyncSession, bus_id: int) -> bool:
     if result.rowcount == 0:
         raise NotFoundException("Bus", bus_id)
     
-    # Invalidate the cache for the deleted bus
     await redis_client.delete(f"bus:{bus_id}")
     return True
 
 
 async def get_bus_route_by_id(db: AsyncSession, route_id: int) -> BusRoute:
     """Get bus route by ID"""
-    cache_key = f"bus_route:{route_id}"
-    cached_route = await redis_client.get(cache_key)
-    if cached_route:
-        route_data = json.loads(cached_route)
-        return BusRoute(**route_data)
-
     result = await db.execute(select(BusRoute).where(BusRoute.id == route_id))
     route = result.scalar_one_or_none()
     if not route:
         raise NotFoundException("BusRoute", route_id)
-
-    await redis_client.set(cache_key, json.dumps(route.to_dict()), ex=3600)
     return route
 
 
@@ -109,20 +107,25 @@ async def get_bus_routes(
     limit: int = 100
 ) -> List[BusRoute]:
     """Get bus routes with optional school filter"""
-    query = select(BusRoute)
+    # FIX: Eagerly load the related 'bus' and 'stops' to prevent validation errors
+    query = (
+        select(BusRoute)
+        .options(selectinload(BusRoute.bus), selectinload(BusRoute.stops))
+    )
 
     if school_id is not None:
         query = query.where(BusRoute.school_id == school_id)
 
     query = query.offset(skip).limit(limit)
-
     result = await db.execute(query)
-    return result.scalars().all()
+    # Use .unique() to handle potential duplicates from the joins
+    return result.scalars().unique().all()
 
 
-async def create_bus_route(db: AsyncSession, route_data: dict) -> BusRoute:
+async def create_bus_route(db: AsyncSession, route_data: BusRouteCreate) -> BusRoute:
     """Create a new bus route"""
-    db_route = BusRoute(**route_data)
+    # FIX: Convert the Pydantic model to a dictionary
+    db_route = BusRoute(**route_data.dict())
     db.add(db_route)
     await db.commit()
     await db.refresh(db_route)
@@ -141,8 +144,6 @@ async def update_bus_route(db: AsyncSession, route_id: int, route_data: dict) ->
     updated_route = result.scalar_one_or_none()
     if not updated_route:
         raise NotFoundException("BusRoute", route_id)
-    
-    await redis_client.delete(f"bus_route:{route_id}")
     return updated_route
 
 
@@ -152,25 +153,15 @@ async def delete_bus_route(db: AsyncSession, route_id: int) -> bool:
     await db.commit()
     if result.rowcount == 0:
         raise NotFoundException("BusRoute", route_id)
-    
-    await redis_client.delete(f"bus_route:{route_id}")
     return True
 
 
 async def get_bus_stop_by_id(db: AsyncSession, stop_id: int) -> BusStop:
     """Get bus stop by ID"""
-    cache_key = f"bus_stop:{stop_id}"
-    cached_stop = await redis_client.get(cache_key)
-    if cached_stop:
-        stop_data = json.loads(cached_stop)
-        return BusStop(**stop_data)
-
     result = await db.execute(select(BusStop).where(BusStop.id == stop_id))
     stop = result.scalar_one_or_none()
     if not stop:
         raise NotFoundException("BusStop", stop_id)
-
-    await redis_client.set(cache_key, json.dumps(stop.to_dict()), ex=3600)
     return stop
 
 
@@ -182,12 +173,9 @@ async def get_bus_stops(
 ) -> List[BusStop]:
     """Get bus stops with optional school filter"""
     query = select(BusStop)
-
     if school_id is not None:
         query = query.join(BusRouteStop).join(BusRoute).where(BusRoute.school_id == school_id)
-
     query = query.offset(skip).limit(limit)
-
     result = await db.execute(query)
     return result.scalars().all()
 
@@ -213,8 +201,6 @@ async def update_bus_stop(db: AsyncSession, stop_id: int, stop_data: dict) -> Bu
     updated_stop = result.scalar_one_or_none()
     if not updated_stop:
         raise NotFoundException("BusStop", stop_id)
-    
-    await redis_client.delete(f"bus_stop:{stop_id}")
     return updated_stop
 
 
@@ -224,16 +210,12 @@ async def delete_bus_stop(db: AsyncSession, stop_id: int) -> bool:
     await db.commit()
     if result.rowcount == 0:
         raise NotFoundException("BusStop", stop_id)
-    
-    await redis_client.delete(f"bus_stop:{stop_id}")
     return True
 
 
 async def get_bus_drivers(db: AsyncSession, bus_id: int) -> List[BusDriver]:
     """Get all drivers for a bus"""
-    result = await db.execute(
-        select(BusDriver).where(BusDriver.bus_id == bus_id)
-    )
+    result = await db.execute(select(BusDriver).where(BusDriver.bus_id == bus_id))
     return result.scalars().all()
 
 

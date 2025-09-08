@@ -4,6 +4,9 @@ from app.models.student import Student, Guardian, GuardianStudent
 from app.core.exceptions import NotFoundException, InvalidDataException
 from typing import Optional, List
 from sqlalchemy.orm import selectinload
+from app.models.user import User
+from app.schemas.student import StudentCreate, StudentUpdate, GuardianCreate, GuardianUpdate
+from datetime import date
 
 
 async def get_student_by_id(db: AsyncSession, student_id: int) -> Student:
@@ -43,6 +46,13 @@ async def get_students_by_bus_route(db: AsyncSession, bus_route_id: int) -> List
 
 async def create_student(db: AsyncSession, student_data: dict) -> Student:
     """Create a new student"""
+    # Add validation
+    try:
+        # Validate against your Pydantic schema
+        StudentCreate(**student_data)
+    except Exception as e:
+        raise InvalidDataException(f"Invalid student data: {str(e)}")
+    
     db_student = Student(**student_data)
     db.add(db_student)
     await db.commit()
@@ -50,19 +60,24 @@ async def create_student(db: AsyncSession, student_data: dict) -> Student:
     return db_student
 
 
-async def update_student(db: AsyncSession, student_id: int, student_data: dict) -> Student:
-    """Update a student"""
-    result = await db.execute(
-        update(Student)
-        .where(Student.id == student_id)
-        .values(**student_data)
-        .returning(Student)
-    )
+async def update_student(db: AsyncSession, student_id: int, student_data: StudentUpdate):
+    """
+    Updates a student's information in the database.
+    """
+    student = await get_student_by_id(db, student_id)
+    if not student:
+        return None
+
+    # Get the update data as a dictionary, excluding unset values
+    update_data = student_data.dict(exclude_unset=True)
+
+    # Update the student object with the new data
+    for key, value in update_data.items():
+        setattr(student, key, value)
+
     await db.commit()
-    updated_student = result.scalar_one_or_none()
-    if not updated_student:
-        raise NotFoundException("Student", student_id)
-    return updated_student
+    await db.refresh(student)
+    return student
 
 
 async def delete_student(db: AsyncSession, student_id: int) -> bool:
@@ -209,3 +224,21 @@ async def delete_guardian_student(db: AsyncSession, relationship_id: int) -> boo
     if result.rowcount == 0:
         raise NotFoundException("GuardianStudentRelationship", relationship_id)
     return True
+
+# Add this function to get guardians with school filtering
+async def get_guardians(
+    db: AsyncSession,
+    school_id: Optional[int] = None,
+    skip: int = 0,
+    limit: int = 100
+) -> List[Guardian]:
+    """Get guardians with optional school filter"""
+    query = select(Guardian).join(User).options(selectinload(Guardian.user))
+    
+    if school_id is not None:
+        query = query.where(User.school_id == school_id)
+    
+    query = query.offset(skip).limit(limit)
+    
+    result = await db.execute(query)
+    return result.scalars().all()

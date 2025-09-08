@@ -1,6 +1,7 @@
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 from typing import Optional, List
 from datetime import datetime, date
+from pydantic.networks import EmailStr
 
 class StudentBase(BaseModel):
     first_name: str
@@ -13,6 +14,14 @@ class StudentCreate(StudentBase):
     school_id: int
     bus_route_id: Optional[int] = None
     bus_stop_id: Optional[int] = None
+
+    # Add this validator to handle the date string
+    @field_validator('date_of_birth', mode='before')
+    @classmethod
+    def format_date(cls, value):
+        if isinstance(value, str):
+            return date.fromisoformat(value)
+        return value
 
 class StudentUpdate(BaseModel):
     first_name: Optional[str] = None
@@ -38,13 +47,23 @@ class StudentResponse(StudentBase):
         from_attributes = True
 
 class GuardianBase(BaseModel):
-    fcm_token: Optional[str] = None
+    email: EmailStr
+    first_name: str
+    last_name: str
+    phone: Optional[str] = None
+    # fcm_token: Optional[str] = None
 
 class GuardianCreate(GuardianBase):
-    user_id: int
-
+    password: str
+    student_ids: Optional[List[int]] = None
 class GuardianUpdate(GuardianBase):
-    pass
+    email: Optional[EmailStr] = None
+    first_name: Optional[str] = None
+    last_name: Optional[str] = None
+    phone: Optional[str] = None
+    fcm_token: Optional[str] = None
+    student_ids: Optional[List[int]] = None
+
 
 class GuardianResponse(GuardianBase):
     id: int
@@ -56,7 +75,7 @@ class GuardianResponse(GuardianBase):
         from_attributes = True
 
 class GuardianStudentBase(BaseModel):
-    relationship: str
+    relationship_type: str
     is_primary: bool = False
 
 class GuardianStudentCreate(GuardianStudentBase):

@@ -1,10 +1,10 @@
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
-from typing import List
+from typing import List, Optional
 from app.db.session import get_db
 from app.core.jwt import get_current_admin, verify_school_resource_access, get_current_active_user
 from app.schemas.user import UserCreate, UserResponse, UserUpdate
-from app.schemas.student import StudentCreate, StudentResponse, StudentUpdate, GuardianUpdate
+from app.schemas.student import StudentCreate, StudentResponse, StudentUpdate, GuardianUpdate, GuardianCreate, GuardianResponse, GuardianWithStudentsResponse
 from app.schemas.bus import BusCreate, BusResponse, BusRouteCreate, BusRouteResponse, BusUpdate, BusRouteUpdate, BusDriverCreate
 from app.core.exceptions import NotFoundException, InvalidDataException
 from app.services.user import create_user, get_users, get_user_by_id, get_user_by_email, update_user, delete_user
@@ -17,12 +17,17 @@ from app.models.student import Student
 from app.models.bus import Bus
 from app.models.trip import Trip
 from sqlalchemy import func, select
-from app.services.student import create_guardian_student, GuardianStudent
+from app.services.student import create_guardian_student, GuardianStudent, create_guardian, get_guardians, get_guardian_by_user_id, delete_guardian_by_user_id,  update_student as update_student_service,delete_student as delete_student_service, get_student_by_id, get_guardian_by_id
 from app.schemas.bus import BusStopCreate, BusStopUpdate, BusStopResponse
 from app.services.bus import create_bus_stop, get_bus_stops as get_bus_stops_service, update_bus_stop, delete_bus_stop, get_bus_stop_by_id
 from app.services.trip import get_active_trips_with_locations
 from datetime import datetime
-
+from fastapi.responses import Response
+from app.schemas.trip import TripResponse
+from app.services.incident import get_incidents as get_all_incidents, get_incidents
+from app.schemas.incident import IncidentResponse
+from sqlalchemy.orm import selectinload
+from app.models.student import Guardian
 
 
 router = APIRouter(
@@ -103,25 +108,16 @@ async def list_drivers(
 
 @router.post(
     "/guardians",
-    response_model=UserResponse,
-    summary="Create a new guardian account with optional student assignment",
-    description="Allows an admin to create a guardian and optionally assign multiple students."
+    response_model=GuardianWithStudentsResponse,
+    summary="Create a new guardian with assigned students"
 )
 async def create_guardian_with_students(
-    guardian_data: UserCreate,
-    student_ids: List[int] = None,
+    guardian_data: GuardianCreate,
     db: AsyncSession = Depends(get_db),
     current_user = Depends(get_current_admin)
 ):
     try:
-        # ✅ Validate role
-        if guardian_data.role != UserRole.GUARDIAN:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Role must be 'guardian' for guardian accounts"
-            )
-
-        # ✅ Check if user already exists
+        # Check if user already exists
         try:
             await get_user_by_email(db, guardian_data.email)
             raise HTTPException(
@@ -131,107 +127,119 @@ async def create_guardian_with_students(
         except NotFoundException:
             pass
 
-        # ✅ Create guardian user
-        guardian_dict = guardian_data.dict()
-        guardian_dict["school_id"] = current_user.school_id
-        guardian_user = await create_user(db, user_data=guardian_dict)
+        # Create user for guardian
+        user_dict = guardian_data.dict(exclude={"student_ids"})
+        user_dict["school_id"] = current_user.school_id
+        user_dict["role"] = UserRole.GUARDIAN
+        
+        # Include password if provided
+        if guardian_data.password:
+            user_dict["password"] = guardian_data.password
+            
+        guardian_user = await create_user(db, user_data=user_dict)
 
-        # ✅ Create corresponding Guardian record
-        from app.services.student import create_guardian
-        guardian_record = await create_guardian(db, {"user_id": guardian_user.id})
+        # Create guardian record
+        guardian = await create_guardian(db, {"user_id": guardian_user.id})
 
-        await send_new_user_email(guardian_user.email, guardian_user.id)
-
-        # ✅ Optional: Assign students
+        # Assign students
         assigned_students = []
-        skipped_students = []
-        if student_ids:
-            for student_id in student_ids:
-                try:
-                    student = await get_student_by_id(db, student_id)
-                    if student.school_id != current_user.school_id:
-                        skipped_students.append(student_id)
-                        continue
+        for student_id in guardian_data.student_ids or []:
+            try:
+                student = await get_student_by_id(db, student_id)
+                if student.school_id != current_user.school_id:
+                    continue
 
-                    existing_relationship = await db.execute(
-                        select(GuardianStudent).where(
-                            GuardianStudent.guardian_id == guardian_record.id,
-                            GuardianStudent.student_id == student.id
-                        )
-                    )
-                    if existing_relationship.scalar_one_or_none():
-                        skipped_students.append(student_id)
-                        continue
+                # Create guardian-student relationship
+                gs = await create_guardian_student(db, {
+                    "guardian_id": guardian.id,
+                    "student_id": student.id,
+                    "relationship_type": "parent",
+                    "is_primary": False
+                })
+                assigned_students.append(gs)
+            except NotFoundException:
+                continue
 
-                    await create_guardian_student(db, {
-                        "guardian_id": guardian_record.id,
-                        "student_id": student.id,
-                        "relationship_type": "parent",
-                        "is_primary": False
-                    })
-                    assigned_students.append(student_id)
-
-                except NotFoundException:
-                    skipped_students.append(student_id)
-
+        # Return the response with proper data
         return {
-            **guardian_user.__dict__,
-            "assigned_students": assigned_students,
-            "skipped_students": skipped_students
+            "id": guardian.id,
+            "user_id": guardian_user.id,
+            "email": guardian_user.email,
+            "first_name": guardian_user.first_name,
+            "last_name": guardian_user.last_name,
+            "phone": guardian_user.phone,
+            "fcm_token": guardian.fcm_token,
+            "created_at": guardian.created_at,
+            "updated_at": guardian.updated_at,
+            "students": assigned_students
         }
-
-    except InvalidDataException as e:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=e.message
-        )
+        
     except Exception as e:
+        print(f"Error creating guardian: {str(e)}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=str(e)
+            detail=f"Failed to create guardian: {str(e)}"
         )
 
+# Add missing guardian endpoints
 @router.get(
-    "/guardians", 
-    response_model=List[UserResponse],
-    summary="List all guardians",
-    description="Retrieves a list of all guardian accounts associated with the admin's school."
+    "/guardians",
+    response_model=List[GuardianResponse],
+    summary="List all guardians"
 )
 async def list_guardians(
     skip: int = 0,
     limit: int = 100,
     db: AsyncSession = Depends(get_db),
-    current_user = Depends(get_current_admin)
+    current_user: User = Depends(get_current_admin)
 ):
-    guardians = await get_users(
-        db, 
-        school_id=current_user.school_id, 
-        role=UserRole.GUARDIAN,
-        skip=skip, 
-        limit=limit
-    )
-    return guardians
+    guardians = await get_guardians(db, school_id=current_user.school_id, skip=skip, limit=limit)
+    return [
+        {
+            "id": g.id,
+            "user_id": g.user.id,
+            "email": g.user.email,
+            "first_name": g.user.first_name,
+            "last_name": g.user.last_name,
+            "phone": g.user.phone,
+            "fcm_token": g.fcm_token,
+            "created_at": g.created_at,
+            "updated_at": g.updated_at
+        }
+        for g in guardians
+    ]
 
 
-@router.post(
-    "/students", 
-    response_model=StudentResponse,
-    summary="Create a new student account",
-    description="Allows an admin to create a new student account and associate it with a school."
-)
+@router.post("/students", response_model=StudentResponse)
 async def create_student_account(
     student_data: StudentCreate,
     db: AsyncSession = Depends(get_db),
     current_user = Depends(get_current_admin)
 ):
-    if student_data.school_id != current_user.school_id:
+    try:
+        # Validate school access
+        if student_data.school_id != current_user.school_id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Cannot create student for another school"
+            )
+        
+        # Create student
+        student = await create_student(db, student_data=student_data.dict())
+        return student
+        
+    except InvalidDataException as e:
         raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Cannot create student for another school"
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(e)
         )
-    
-    student = await create_student(db, student_data=student_data.dict())
-    return student
+    except Exception as e:
+        # Log the actual error for debugging
+        print(f"Student creation error: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Internal server error"
+        )
 
 
 @router.get(
@@ -491,31 +499,90 @@ async def delete_driver(
     return {"detail": "Driver deleted"}
 
 @router.put(
-    "/guardians/{guardian_user_id}",
-    response_model=UserResponse,
-    summary="Update a guardian account"
+    "/guardians/{guardian_id}",
+    response_model=GuardianWithStudentsResponse,
+    summary="Update a guardian and their students"
 )
-async def update_guardian_user(
-    guardian_user_id: int,
+async def update_guardian_with_students(
+    guardian_id: int,
     guardian_data: GuardianUpdate,
     db: AsyncSession = Depends(get_db),
     current_user = Depends(get_current_admin)
 ):
     try:
-        guardian_user = await get_user_by_id(db, guardian_user_id)
-    except NotFoundException:
-        raise HTTPException(status_code=404, detail="Guardian not found")
+        # Get the guardian
+        guardian = await get_guardian_by_id(db, guardian_id)
+        guardian_user = await get_user_by_id(db, guardian.user_id)
+        
+        # Verify school access
+        if guardian_user.school_id != current_user.school_id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Guardian does not belong to your school"
+            )
 
-    if guardian_user.role != UserRole.GUARDIAN or guardian_user.school_id != current_user.school_id:
-        raise HTTPException(status_code=404, detail="Guardian not found")
-    
-    updated_user = await update_user(db, guardian_user_id, guardian_data.dict(exclude_unset=True))
-    
-    guardian = await get_guardian_by_user_id(db, guardian_user_id)
-    await update_guardian(db, guardian.id, {"fcm_token": guardian_data.fcm_token})
-    
-    return updated_user
+        # Update user data
+        update_data = guardian_data.dict(exclude={"student_ids", "fcm_token"}, exclude_unset=True)
+        if update_data:
+            await update_user(db, guardian.user_id, update_data)
 
+        # Update guardian-specific data
+        if guardian_data.fcm_token is not None:
+            await update_guardian(db, guardian_id, {"fcm_token": guardian_data.fcm_token})
+
+        # Update student assignments
+        if guardian_data.student_ids is not None:
+            # Remove existing relationships
+            existing_relationships = await db.execute(
+                select(GuardianStudent).where(GuardianStudent.guardian_id == guardian_id)
+            )
+            for rel in existing_relationships.scalars().all():
+                await db.delete(rel)
+
+            # Add new relationships
+            for student_id in guardian_data.student_ids:
+                try:
+                    student = await get_student_by_id(db, student_id)
+                    if student.school_id == current_user.school_id:
+                        await create_guardian_student(db, {
+                            "guardian_id": guardian_id,
+                            "student_id": student_id,
+                            "relationship_type": "parent",
+                            "is_primary": False
+                        })
+                except NotFoundException:
+                    continue
+
+        await db.commit()
+
+        # Get updated guardian with students
+        result = await db.execute(
+            select(Guardian)
+            .where(Guardian.id == guardian_id)
+            .options(selectinload(Guardian.students).selectinload(GuardianStudent.student))
+        )
+        updated_guardian = result.scalar_one()
+
+        return {
+            "id": updated_guardian.id,
+            "user_id": guardian_user.id,
+            "email": guardian_user.email,
+            "first_name": guardian_user.first_name,
+            "last_name": guardian_user.last_name,
+            "phone": guardian_user.phone,
+            "fcm_token": updated_guardian.fcm_token,
+            "created_at": updated_guardian.created_at,
+            "updated_at": updated_guardian.updated_at,
+            "students": updated_guardian.students
+        }
+        
+    except NotFoundException as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to update guardian: {str(e)}"
+        )
 @router.delete(
     "/guardians/{guardian_user_id}",
     summary="Delete a guardian account"
@@ -537,46 +604,40 @@ async def delete_guardian_user(
     await delete_user(db, guardian_user_id)
     return {"detail": "Guardian deleted"}
 
-@router.put(
-    "/students/{student_id}",
-    response_model=StudentResponse,
-    summary="Update a student account"
-)
+@router.put("/students/{student_id}", response_model=StudentResponse)
 async def update_student(
     student_id: int,
     student_data: StudentUpdate,
     db: AsyncSession = Depends(get_db),
-    current_user = Depends(get_current_admin)
+    current_user: User = Depends(get_current_admin)
 ):
-    try:
-        student = await get_student_by_id(db, student_id)
-    except NotFoundException:
+    """
+    Update an existing student's information.
+    """
+    # Use the new service function to update the student
+    updated_student = await update_student_service(db, student_id, student_data)
+
+    if updated_student is None:
         raise HTTPException(status_code=404, detail="Student not found")
 
-    if student.school_id != current_user.school_id:
-        raise HTTPException(status_code=404, detail="Student not found")
-
-    return await update_student(db, student_id, student_data.dict(exclude_unset=True))
-
+    return updated_student
 @router.delete(
     "/students/{student_id}",
     summary="Delete a student account"
 )
+@router.delete("/students/{student_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_student(
     student_id: int,
     db: AsyncSession = Depends(get_db),
-    current_user = Depends(get_current_admin)
+    current_user: User = Depends(get_current_admin)
 ):
-    try:
-        student = await get_student_by_id(db, student_id)
-    except NotFoundException:
+    """
+    Delete a student by their ID.
+    """
+    success = await delete_student_service(db, student_id)
+    if not success:
         raise HTTPException(status_code=404, detail="Student not found")
-    
-    if student.school_id != current_user.school_id:
-        raise HTTPException(status_code=404, detail="Student not found")
-
-    await delete_student(db, student_id)
-    return {"detail": "Student deleted"}
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 # -------------------- BUS & ROUTE UPDATE & DELETE --------------------
 
@@ -757,3 +818,40 @@ async def get_live_bus_locations(
         })
         
     return response_data
+
+@router.get(
+    "/incidents",
+    response_model=List[dict],
+    summary="Get all incidents with trip and bus info",
+    description="Allows admin to view all incidents with related trip and bus details."
+)
+async def admin_get_all_incidents(
+    school_id: Optional[int] = None,
+    status: Optional[str] = None,
+    skip: int = 0,
+    limit: int = 100,
+    db: AsyncSession = Depends(get_db)
+):
+    # Fetch incidents with optional filters
+    incidents = await get_incidents(db, school_id=school_id, status=status, skip=skip, limit=limit)
+    
+    result_list = []
+    for incident in incidents:
+        trip_id = None
+        bus_id = None
+        # If incident is associated with a student, try to get their trip
+        if incident.student_id:
+            trip_query = select(Trip).where(Trip.route_id == incident.student.bus_route_id).limit(1)
+            trip_result = await db.execute(trip_query)
+            trip = trip_result.scalar_one_or_none()
+            if trip:
+                trip_id = trip.id
+                bus_id = trip.bus_id
+        
+        result_list.append({
+            "incident": IncidentResponse.from_orm(incident),
+            "trip_id": trip_id,
+            "bus_id": bus_id
+        })
+    
+    return result_list

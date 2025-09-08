@@ -35,6 +35,7 @@ class SchoolUpdate(BaseModel):
 class SchoolResponse(SchoolBase):
     id: int
     is_active: bool
+    admin_assigned: bool = False
     created_at: datetime
     updated_at: Optional[datetime] = None
 

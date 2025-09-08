@@ -17,6 +17,9 @@ from datetime import datetime
 from app.utils.websocket import manager
 from app.schemas.user import UserRole
 from app.services.user import get_users
+from app.schemas.incident import IncidentCreate, IncidentResponse
+from app.services.incident import create_incident, get_incident_by_id, update_incident, delete_incident, get_user_reported_incidents
+from app.schemas.incident import IncidentUpdate
 
 router = APIRouter(
     prefix="/driver",
@@ -286,6 +289,79 @@ async def update_trip_location(
 
     return location_update
 
+@router.get("/incidents", response_model=List[IncidentResponse])
+async def list_my_incidents(
+    skip: int = 0,
+    limit: int = 100,
+    db: AsyncSession = Depends(get_db),
+    current_user = Depends(get_current_driver)
+):
+    incidents = await get_user_reported_incidents(db, user_id=current_user.id, skip=skip, limit=limit)
+    return incidents
+
+
+@router.post(
+    "/incidents",
+    response_model=IncidentResponse,
+    summary="Report a new incident"
+)
+async def report_incident(
+    incident_data: IncidentCreate,
+    db: AsyncSession = Depends(get_db),
+    current_user = Depends(get_current_driver)
+):
+    incident_dict = incident_data.dict()
+    # Override reporter and school to ensure security
+    incident_dict["reported_by_id"] = current_user.id
+    incident_dict["school_id"] = current_user.school_id
+
+    incident = await create_incident(db, incident_dict)
+
+    # Notify all school admins via WebSocket
+    admins = await get_users(db, school_id=current_user.school_id, role="admin")
+    recipients = [str(admin.id) for admin in admins]
+    message = {
+        "type": "incident_reported",
+        "incident": {
+            "id": incident.id,
+            "title": incident.title,
+            "description": incident.description,
+            "type": incident.type,
+            "status": incident.status,
+            "student_id": incident.student_id,
+            "reported_by_id": incident.reported_by_id,
+            "occurred_at": incident.occurred_at.isoformat()
+        }
+    }
+    await manager.broadcast(message, recipients)
+
+    return incident
+
+@router.patch("/{incident_id}", response_model=IncidentResponse)
+async def update_my_incident(
+    incident_id: int,
+    incident_data: IncidentUpdate,
+    db: AsyncSession = Depends(get_db),
+    current_user = Depends(get_current_driver)
+):
+    incident = await get_incident_by_id(db, incident_id)
+    if incident.reported_by_id != current_user.id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="You can only update incidents you reported")
+    updated_incident = await update_incident(db, incident_id, incident_data.dict(exclude_unset=True))
+    return updated_incident
+
+# Delete an incident (only by the driver who reported it)
+@router.delete("/{incident_id}", response_model=dict)
+async def delete_my_incident(
+    incident_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_user = Depends(get_current_driver)
+):
+    incident = await get_incident_by_id(db, incident_id)
+    if incident.reported_by_id != current_user.id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="You can only delete incidents you reported")
+    await delete_incident(db, incident_id)
+    return {"message": "Incident deleted successfully"}
 
 @router.post(
     "/students/verify-qr",
