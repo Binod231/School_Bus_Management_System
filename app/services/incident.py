@@ -3,6 +3,9 @@ from sqlalchemy import select, update, delete
 from app.models.incident import Incident
 from app.core.exceptions import NotFoundException, DatabaseException
 from typing import Optional, List
+from sqlalchemy.orm import selectinload
+from app.models.student import Student
+from app.schemas.incident import IncidentUpdate
 
 
 async def get_incident_by_id(db: AsyncSession, incident_id: int) -> Incident:
@@ -15,23 +18,26 @@ async def get_incident_by_id(db: AsyncSession, incident_id: int) -> Incident:
 
 
 async def get_incidents(
-    db: AsyncSession, 
+    db: AsyncSession,
     school_id: Optional[int] = None,
     status: Optional[str] = None,
-    skip: int = 0, 
+    skip: int = 0,
     limit: int = 100
 ) -> List[Incident]:
-    """Get incidents with optional filters"""
-    query = select(Incident)
-    
+    """Get incidents with optional filters, eagerly loading student data."""
+
+    # Start the query and immediately tell it to load the student relationship
+    query = select(Incident).options(selectinload(Incident.student))
+
+    # If a school_id is provided, filter by it directly
     if school_id is not None:
         query = query.where(Incident.school_id == school_id)
-    
+
     if status is not None:
         query = query.where(Incident.status == status)
-    
+
     query = query.offset(skip).limit(limit).order_by(Incident.reported_at.desc())
-    
+
     result = await db.execute(query)
     return result.scalars().all()
 
@@ -45,19 +51,19 @@ async def create_incident(db: AsyncSession, incident_data: dict) -> Incident:
     return db_incident
 
 
-async def update_incident(db: AsyncSession, incident_id: int, incident_data: dict) -> Incident:
-    """Update an incident"""
-    result = await db.execute(
-        update(Incident)
-        .where(Incident.id == incident_id)
-        .values(**incident_data)
-        .returning(Incident)
-    )
+async def update_incident(db: AsyncSession, incident_id: int, incident_data: IncidentUpdate) -> Incident:
+    """Update an incident using the IncidentUpdate schema."""
+    db_incident = await get_incident_by_id(db, incident_id)
+    
+    # Convert the Pydantic model to a dictionary, excluding unset fields
+    update_data = incident_data.dict(exclude_unset=True)
+    
+    for key, value in update_data.items():
+        setattr(db_incident, key, value)
+        
     await db.commit()
-    updated_incident = result.scalar_one_or_none()
-    if not updated_incident:
-        raise NotFoundException("Incident", incident_id)
-    return updated_incident
+    await db.refresh(db_incident)
+    return db_incident
 
 
 async def delete_incident(db: AsyncSession, incident_id: int) -> bool:

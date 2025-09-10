@@ -1,6 +1,7 @@
 from pydantic import BaseModel
 from typing import Optional, List
 from datetime import datetime
+from app.schemas.user import UserResponse
 
 
 class BusBase(BaseModel):
@@ -34,6 +35,7 @@ class BusResponse(BusBase):
     is_active: bool
     created_at: datetime
     updated_at: Optional[datetime] = None
+    assigned_driver: Optional[UserResponse] = None
 
     class Config:
         from_attributes = True
@@ -66,6 +68,7 @@ class BusRouteResponse(BusRouteBase):
     is_active: bool
     created_at: datetime
     updated_at: Optional[datetime] = None
+    bus: Optional[BusResponse] = None
 
     class Config:
         from_attributes = True

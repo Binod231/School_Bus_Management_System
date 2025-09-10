@@ -9,6 +9,7 @@ from app.models.user import UserRole
 from app.services.student import get_student_by_id, get_guardian_by_user_id, get_guardian_student_relationship
 from app.services.notification import notify_guardians_incident
 from app.core.exceptions import NotFoundException
+from app.models.user import User
 
 router = APIRouter(
     tags=["incidents"]
@@ -138,43 +139,26 @@ async def get_incident(
     return incident
 
 
-@router.patch(
-    "/incidents/{incident_id}", 
-    response_model=IncidentResponse,
-    summary="Update incident status",
-    description="Allows an admin or superadmin to update the status of an incident."
-)
+@router.patch("/incidents/{incident_id}", response_model=IncidentResponse, summary="Update incident status or details")
 async def update_incident_status(
     incident_id: int,
     incident_data: IncidentUpdate,
     db: AsyncSession = Depends(get_db),
-    current_user = Depends(get_current_active_user)
+    current_user: User = Depends(get_current_active_user)
 ):
-    if current_user.role not in [UserRole.ADMIN, UserRole.SUPERADMIN]:
+    """
+    Update incident status or details. Accessible by the reporter or an admin.
+    """
+    incident_to_update = await get_incident_by_id(db, incident_id)
+
+    # Authorization check
+    if not (current_user.role == "admin" or incident_to_update.reported_by_id == current_user.id):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Only admins can update incidents"
+            detail="Not authorized to update this incident"
         )
-    
-    try:
-        incident = await get_incident_by_id(db, incident_id)
-    except NotFoundException as e:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=e.message
-        )
-    
-    if current_user.role == UserRole.ADMIN and incident.school_id != current_user.school_id:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="You don't have access to this incident"
-        )
-    
-    if incident_data.status == "resolved" and not incident.resolved_by_id:
-        incident_data_dict = incident_data.dict(exclude_unset=True)
-        incident_data_dict["resolved_by_id"] = current_user.id
-        updated_incident = await update_incident(db, incident_id, incident_data_dict)
-    else:
-        updated_incident = await update_incident(db, incident_id, incident_data.dict(exclude_unset=True))
+        
+    # Pass the Pydantic model directly to the service
+    updated_incident = await update_incident(db, incident_id, incident_data)
     
     return updated_incident

@@ -24,6 +24,8 @@ class IncidentBase(BaseModel):
     title: str
     description: str
     occurred_at: datetime
+    driver_id: Optional[int] = None
+    bus_id: Optional[int] = None
 
 
 class IncidentCreate(IncidentBase):
@@ -33,14 +35,18 @@ class IncidentCreate(IncidentBase):
 
 
 class IncidentUpdate(BaseModel):
-    type: Optional[IncidentTypeEnum] = None
-    status: Optional[IncidentStatusEnum] = None
     title: Optional[str] = None
     description: Optional[str] = None
+    status: Optional[IncidentStatusEnum] = None
+    type: Optional[IncidentTypeEnum] = None
     occurred_at: Optional[datetime] = None
-    resolved_at: Optional[datetime] = None
     resolution: Optional[str] = None
-    resolved_by_id: Optional[int] = None
+    student_id: Optional[int] = None
+    bus_id: Optional[int] = None
+    driver_id: Optional[int] = None
+
+    class Config:
+        from_attributes = True
 
 
 class IncidentResponse(IncidentBase):

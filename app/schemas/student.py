@@ -2,13 +2,15 @@ from pydantic import BaseModel, field_validator
 from typing import Optional, List
 from datetime import datetime, date
 from pydantic.networks import EmailStr
-
+from app.schemas.user import UserResponse
+from app.schemas.bus import BusRouteResponse
 class StudentBase(BaseModel):
     first_name: str
     last_name: str
     date_of_birth: date
     grade: str
     student_id: str
+    
 
 class StudentCreate(StudentBase):
     school_id: int
@@ -33,19 +35,12 @@ class StudentUpdate(BaseModel):
     bus_stop_id: Optional[int] = None
     is_active: Optional[bool] = None
 
-class StudentResponse(StudentBase):
+class GuardianForStudentResponse(BaseModel):
     id: int
-    school_id: int
-    bus_route_id: Optional[int] = None
-    bus_stop_id: Optional[int] = None
-    qr_code: Optional[str] = None
-    is_active: bool
-    created_at: datetime
-    updated_at: Optional[datetime] = None
+    user: UserResponse
 
     class Config:
         from_attributes = True
-
 class GuardianBase(BaseModel):
     email: EmailStr
     first_name: str
@@ -70,6 +65,8 @@ class GuardianResponse(GuardianBase):
     user_id: int
     created_at: datetime
     updated_at: Optional[datetime] = None
+    is_active: Optional[bool] = True 
+    student_count: Optional[int] = 0
 
     class Config:
         from_attributes = True
@@ -87,10 +84,25 @@ class GuardianStudentResponse(GuardianStudentBase):
     guardian_id: int
     student_id: int
     created_at: datetime
+    guardian: GuardianForStudentResponse
 
     class Config:
         from_attributes = True
 
+class StudentResponse(StudentBase):
+    id: int
+    school_id: int
+    bus_route: Optional[BusRouteResponse] = None
+    bus_route_id: Optional[int] = None
+    bus_stop_id: Optional[int] = None
+    qr_code: Optional[str] = None
+    is_active: bool
+    created_at: datetime
+    updated_at: Optional[datetime] = None
+    guardians: List[GuardianStudentResponse] = []
+
+    class Config:
+        from_attributes = True
 class StudentWithGuardiansResponse(StudentResponse):
     guardians: List[GuardianStudentResponse] = []
 

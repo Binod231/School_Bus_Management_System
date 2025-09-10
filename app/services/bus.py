@@ -44,19 +44,33 @@ async def get_buses(
     skip: int = 0,
     limit: int = 100
 ) -> List[Bus]:
-    """Get buses with optional school filter"""
-    query = select(Bus)
+    """Get buses with optional school filter and assigned driver"""
+    query = (
+        select(Bus)
+        .options(
+            selectinload(Bus.drivers)
+            .selectinload(BusDriver.driver)
+        )
+    )
     if school_id is not None:
         query = query.where(Bus.school_id == school_id)
     query = query.offset(skip).limit(limit)
     result = await db.execute(query)
-    return result.scalars().all()
+    buses = result.scalars().unique().all()
+
+    for bus in buses:
+        active_driver = next((d.driver for d in bus.drivers if d.is_active), None)
+        if active_driver:
+            bus.assigned_driver = active_driver
+        else:
+            bus.assigned_driver = None
+
+    return buses
 
 
-async def create_bus(db: AsyncSession, bus_data: BusCreate) -> Bus:
+async def create_bus(db: AsyncSession, bus_data: dict) -> Bus:
     """Create a new bus"""
-    # FIX: Convert the Pydantic model to a dictionary
-    db_bus = Bus(**bus_data.dict())
+    db_bus = Bus(**bus_data)
     db.add(db_bus)
     await db.commit()
     await db.refresh(db_bus)
@@ -122,10 +136,9 @@ async def get_bus_routes(
     return result.scalars().unique().all()
 
 
-async def create_bus_route(db: AsyncSession, route_data: BusRouteCreate) -> BusRoute:
+async def create_bus_route(db: AsyncSession, route_data: dict) -> BusRoute:
     """Create a new bus route"""
-    # FIX: Convert the Pydantic model to a dictionary
-    db_route = BusRoute(**route_data.dict())
+    db_route = BusRoute(**route_data)
     db.add(db_route)
     await db.commit()
     await db.refresh(db_route)

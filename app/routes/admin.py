@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 from typing import List, Optional
 from app.db.session import get_db
@@ -18,16 +18,20 @@ from app.models.bus import Bus
 from app.models.trip import Trip
 from sqlalchemy import func, select
 from app.services.student import create_guardian_student, GuardianStudent, create_guardian, get_guardians, get_guardian_by_user_id, delete_guardian_by_user_id,  update_student as update_student_service,delete_student as delete_student_service, get_student_by_id, get_guardian_by_id
-from app.schemas.bus import BusStopCreate, BusStopUpdate, BusStopResponse
+from app.schemas.bus import BusStopCreate, BusStopUpdate, BusStopResponse, BusRouteResponse
 from app.services.bus import create_bus_stop, get_bus_stops as get_bus_stops_service, update_bus_stop, delete_bus_stop, get_bus_stop_by_id
 from app.services.trip import get_active_trips_with_locations
 from datetime import datetime
 from fastapi.responses import Response
 from app.schemas.trip import TripResponse
-from app.services.incident import get_incidents as get_all_incidents, get_incidents
-from app.schemas.incident import IncidentResponse
-from sqlalchemy.orm import selectinload
+from app.services.incident import get_incidents, create_incident, update_incident, get_incident_by_id, delete_incident
+from app.schemas.incident import IncidentResponse, IncidentUpdate, IncidentCreate
+from sqlalchemy.orm import selectinload, Session
 from app.models.student import Guardian
+from app.services.student import get_guardian_students
+from app import models
+from app.services.notification import notify_guardians_incident
+
 
 
 router = APIRouter(
@@ -64,7 +68,7 @@ async def create_driver(
         except NotFoundException:
             pass
         
-        driver_data_dict = driver_data.dict()
+        driver_data_dict = driver_data.model_dump()
         driver_data_dict["school_id"] = current_user.school_id
         
         driver = await create_user(db, user_data=driver_data_dict)
@@ -128,7 +132,7 @@ async def create_guardian_with_students(
             pass
 
         # Create user for guardian
-        user_dict = guardian_data.dict(exclude={"student_ids"})
+        user_dict = guardian_data.model_dump(exclude={"student_ids"})
         user_dict["school_id"] = current_user.school_id
         user_dict["role"] = UserRole.GUARDIAN
         
@@ -141,8 +145,15 @@ async def create_guardian_with_students(
         # Create guardian record
         guardian = await create_guardian(db, {"user_id": guardian_user.id})
 
-        # Assign students
-        assigned_students = []
+        # ✅ ADD EMAIL NOTIFICATION WITH ERROR HANDLING
+        try:
+            await send_new_user_email(guardian_user.email, guardian_user.id)
+        except Exception as email_error:
+            print(f"Failed to send welcome email: {email_error}")
+            # Log the error but don't fail the guardian creation
+
+        # Assign students and collect student data for response
+        assigned_students_data = []
         for student_id in guardian_data.student_ids or []:
             try:
                 student = await get_student_by_id(db, student_id)
@@ -150,13 +161,46 @@ async def create_guardian_with_students(
                     continue
 
                 # Create guardian-student relationship
-                gs = await create_guardian_student(db, {
+                gs_data = {
                     "guardian_id": guardian.id,
                     "student_id": student.id,
                     "relationship_type": "parent",
                     "is_primary": False
-                })
-                assigned_students.append(gs)
+                }
+                gs = await create_guardian_student(db, gs_data)
+                assigned_students_data = []
+                
+                # ✅ FIX: Create proper response data instead of ORM object
+                # Use the input data plus the returned ID, not the ORM object
+                # assigned_students_data.append({
+                #     "id": gs.id,  # This should be the ID from the created relationship
+                #     "guardian_id": guardian.id,
+                #     "student_id": student.id,
+                #     "relationship_type": "parent",
+                #     "is_primary": False,
+                #     "created_at": datetime.utcnow(),
+                #     "updated_at": datetime.utcnow(),
+                #     # Add student details
+                #     "student": {
+                #         "id": student.id,
+                #         "first_name": student.first_name,
+                #         "last_name": student.last_name,
+                #         "student_id": student.student_id,
+                #         "grade": student.grade
+                #     },
+                #     # ✅ ADD THE REQUIRED GUARDIAN FIELD
+                #     "guardian": {
+                #         "id": guardian.id,
+                #         "user_id": guardian_user.id,
+                #         "email": guardian_user.email,
+                #         "first_name": guardian_user.first_name,
+                #         "last_name": guardian_user.last_name,
+                #         "phone": guardian_user.phone,
+                #         "fcm_token": guardian.fcm_token or "",
+                #         "created_at": guardian.created_at,
+                #         "updated_at": guardian.updated_at
+                #     }
+                # })
             except NotFoundException:
                 continue
 
@@ -168,10 +212,10 @@ async def create_guardian_with_students(
             "first_name": guardian_user.first_name,
             "last_name": guardian_user.last_name,
             "phone": guardian_user.phone,
-            "fcm_token": guardian.fcm_token,
+            "fcm_token": guardian.fcm_token or "",
             "created_at": guardian.created_at,
             "updated_at": guardian.updated_at,
-            "students": assigned_students
+            "students": assigned_students_data
         }
         
     except Exception as e:
@@ -181,7 +225,7 @@ async def create_guardian_with_students(
             detail=f"Failed to create guardian: {str(e)}"
         )
 
-# Add missing guardian endpoints
+# fix the list_guardians endpoint
 @router.get(
     "/guardians",
     response_model=List[GuardianResponse],
@@ -193,21 +237,118 @@ async def list_guardians(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_admin)
 ):
-    guardians = await get_guardians(db, school_id=current_user.school_id, skip=skip, limit=limit)
-    return [
-        {
-            "id": g.id,
-            "user_id": g.user.id,
-            "email": g.user.email,
-            "first_name": g.user.first_name,
-            "last_name": g.user.last_name,
-            "phone": g.user.phone,
-            "fcm_token": g.fcm_token,
-            "created_at": g.created_at,
-            "updated_at": g.updated_at
-        }
-        for g in guardians
-    ]
+    # Use the proper query to get guardians with user data
+    query = (
+        select(Guardian)
+        .join(User)
+        .where(User.school_id == current_user.school_id)
+        .where(User.role == UserRole.GUARDIAN)
+        .options(selectinload(Guardian.user))
+        .offset(skip)
+        .limit(limit)
+    )
+    
+    result = await db.execute(query)
+    guardians = result.scalars().all()
+    
+    guardian_responses = []
+    for guardian in guardians:
+        # Get the student count for this guardian
+        student_count_result = await db.execute(
+            select(func.count(GuardianStudent.id))
+            .where(GuardianStudent.guardian_id == guardian.id)
+        )
+        student_count = student_count_result.scalar() or 0
+        
+        guardian_responses.append({
+            "id": guardian.id,
+            "user_id": guardian.user.id,
+            "email": guardian.user.email,
+            "first_name": guardian.user.first_name,
+            "last_name": guardian.user.last_name,
+            "phone": guardian.user.phone,
+            "fcm_token": guardian.fcm_token,
+            "created_at": guardian.created_at,
+            "updated_at": guardian.updated_at,
+            "is_active": guardian.user.is_active,  # Make sure this is included
+            "student_count": student_count,  # Add student count
+        })
+    
+    return guardian_responses
+
+@router.get(
+    "/guardians/{guardian_id}",
+    response_model=GuardianWithStudentsResponse,
+    summary="Get guardian by ID"
+)
+async def get_guardian(
+    guardian_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_admin)
+):
+    """
+    Get a specific guardian by ID with their associated students.
+
+    This function uses a single, efficient query with eager loading to fetch all
+    necessary data and then constructs the response to perfectly match the schema,
+    preventing validation errors.
+    """
+    # 1. Define the single, comprehensive query to fetch all data at once.
+    stmt = (
+        select(Guardian)
+        .where(Guardian.id == guardian_id)
+        .options(
+            # Load the related User object to get email, name, etc.
+            selectinload(Guardian.user),
+            # Load the list of student relationships (GuardianStudent objects)
+            selectinload(Guardian.students).options(
+                # For each relationship, load the full Student object
+                selectinload(GuardianStudent.student),
+                # And also load the Guardian and their User for the nested response schema
+                selectinload(GuardianStudent.guardian).selectinload(Guardian.user)
+            )
+        )
+    )
+
+    # 2. Execute the query.
+    result = await db.execute(stmt)
+    # Use .unique() to prevent duplicates from joins and .first() to get the single result
+    guardian = result.scalars().unique().first()
+
+    # 3. Handle validation and security checks.
+    if not guardian:
+        raise HTTPException(status_code=404, detail="Guardian not found")
+
+    if not guardian.user:
+         raise HTTPException(status_code=404, detail="Guardian user data not found")
+
+    if guardian.user.school_id != current_user.school_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You do not have permission to view this guardian."
+        )
+
+    # 4. Manually construct the response to match the Pydantic schema.
+    #    This step explicitly solves the "Field required" validation error.
+    response_data = {
+        "id": guardian.id,
+        "user_id": guardian.user_id,
+        # Pull required fields from the eagerly loaded 'user' object
+        "email": guardian.user.email,
+        "first_name": guardian.user.first_name,
+        "last_name": guardian.user.last_name,
+        "phone": guardian.user.phone,
+        # 'is_active' and other fields might be on the user or guardian model
+        "is_active": guardian.user.is_active, 
+        "created_at": guardian.created_at,
+        "updated_at": guardian.updated_at,
+        "student_count": len(guardian.students),
+        # Pydantic can now correctly serialize this list because we eager-loaded
+        # all the nested data it needs (student, guardian, user).
+        "students": guardian.students
+    }
+
+    return response_data
 
 
 @router.post("/students", response_model=StudentResponse)
@@ -225,7 +366,7 @@ async def create_student_account(
             )
         
         # Create student
-        student = await create_student(db, student_data=student_data.dict())
+        student = await create_student(db, student_data=student_data.model_dump())
         return student
         
     except InvalidDataException as e:
@@ -262,7 +403,6 @@ async def list_students(
     )
     return students
 
-
 @router.post(
     "/buses", 
     response_model=BusResponse,
@@ -280,7 +420,7 @@ async def create_bus_account(
             detail="Cannot create bus for another school"
         )
     
-    bus = await create_bus(db, bus_data=bus_data.dict())
+    bus = await create_bus(db, bus_data=bus_data.model_dump())
     return bus
 
 
@@ -322,12 +462,12 @@ async def create_bus_route_account(
             detail="Cannot create bus route for another school"
         )
     
-    route = await create_bus_route(db, route_data=route_data.dict())
+    route = await create_bus_route(db, route_data=route_data.model_dump())
     return route
 
 
 @router.get(
-    "/bus-routes", 
+    "/bus-routes",
     response_model=List[BusRouteResponse],
     summary="List all bus routes",
     description="Retrieves a list of all bus routes associated with the admin's school."
@@ -338,13 +478,18 @@ async def list_bus_routes(
     db: AsyncSession = Depends(get_db),
     current_user = Depends(get_current_admin)
 ):
-    routes = await get_bus_routes(
-        db, 
-        school_id=current_user.school_id,
-        skip=skip, 
-        limit=limit
+    # This query now joins the bus data, so you get the bus number
+    query = (
+        select(models.BusRoute)
+        .options(selectinload(models.BusRoute.bus))
+        .where(models.BusRoute.school_id == current_user.school_id)
+        .offset(skip)
+        .limit(limit)
     )
+    result = await db.execute(query)
+    routes = result.scalars().all()
     return routes
+
 
 
 @router.post(
@@ -380,7 +525,7 @@ async def assign_driver(
                 detail="User is not a driver"
             )
     
-        assignment = await assign_driver_to_bus(db, assignment_data=assignment_data.dict())
+        assignment = await assign_driver_to_bus(db, assignment_data=assignment_data.model_dump())
         
         # Reload bus object with relationships
         await db.refresh(bus, ["drivers"])
@@ -476,7 +621,7 @@ async def update_driver(
     if driver.role != UserRole.DRIVER or driver.school_id != current_user.school_id:
         raise HTTPException(status_code=404, detail="Driver not found")
     
-    return await update_user(db, driver_id, driver_data.dict(exclude_unset=True))
+    return await update_user(db, driver_id, driver_data.model_dump(exclude_unset=True))
 
 @router.delete(
     "/drivers/{driver_id}",
@@ -522,7 +667,7 @@ async def update_guardian_with_students(
             )
 
         # Update user data
-        update_data = guardian_data.dict(exclude={"student_ids", "fcm_token"}, exclude_unset=True)
+        update_data = guardian_data.model_dump(exclude={"student_ids", "fcm_token"}, exclude_unset=True)
         if update_data:
             await update_user(db, guardian.user_id, update_data)
 
@@ -604,7 +749,12 @@ async def delete_guardian_user(
     await delete_user(db, guardian_user_id)
     return {"detail": "Guardian deleted"}
 
-@router.put("/students/{student_id}", response_model=StudentResponse)
+
+@router.put(
+    "/students/{student_id}",
+    response_model=StudentResponse,
+    summary="Update a student"
+)
 async def update_student(
     student_id: int,
     student_data: StudentUpdate,
@@ -612,15 +762,26 @@ async def update_student(
     current_user: User = Depends(get_current_admin)
 ):
     """
-    Update an existing student's information.
+    Updates a student's details by calling the student service,
+    which handles database operations and relationship loading.
     """
-    # Use the new service function to update the student
-    updated_student = await update_student_service(db, student_id, student_data)
+    try:
+        # Security Check: Ensure the admin has permission to update this student.
+        student_to_update = await get_student_by_id(db, student_id)
+        if student_to_update.school_id != current_user.school_id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="You do not have permission to edit this student."
+            )
+        
+        # ✅ THE FIX: Call the service function to perform the update.
+        # This service function is already set up to handle eager loading correctly.
+        updated_student = await update_student_service(db, student_id, student_data)
+        return updated_student
 
-    if updated_student is None:
-        raise HTTPException(status_code=404, detail="Student not found")
+    except NotFoundException as e:
+        raise HTTPException(status_code=404, detail=str(e))
 
-    return updated_student
 @router.delete(
     "/students/{student_id}",
     summary="Delete a student account"
@@ -660,7 +821,7 @@ async def update_bus_endpoint(
     if bus.school_id != current_user.school_id:
         raise HTTPException(status_code=404, detail="Bus not found")
     
-    return await update_bus(db, bus_id, bus_data.dict(exclude_unset=True))
+    return await update_bus(db, bus_id, bus_data.model_dump(exclude_unset=True))
 
 @router.delete(
     "/buses/{bus_id}",
@@ -701,7 +862,7 @@ async def update_bus_route_endpoint(
     if route.school_id != current_user.school_id:
         raise HTTPException(status_code=404, detail="Bus route not found")
     
-    return await update_bus_route(db, route_id, route_data.dict(exclude_unset=True))
+    return await update_bus_route(db, route_id, route_data.model_dump(exclude_unset=True))
 
 @router.delete(
     "/bus-routes/{route_id}",
@@ -736,7 +897,7 @@ async def create_new_bus_stop(
     current_user: User = Depends(get_current_admin)
 ):
     # In a real app, you might associate stops with a school, but keeping it simple for now.
-    return await create_bus_stop(db, bus_stop_data.dict())
+    return await create_bus_stop(db, bus_stop_data.model_dump())
 
 @router.get(
     "/bus-stops",
@@ -763,7 +924,7 @@ async def update_existing_bus_stop(
     current_user: User = Depends(get_current_admin)
 ):
     # Add verification logic here to ensure stop belongs to admin's school if needed
-    return await update_bus_stop(db, stop_id, bus_stop_data.dict(exclude_unset=True))
+    return await update_bus_stop(db, stop_id, bus_stop_data.model_dump(exclude_unset=True))
 
 @router.delete(
     "/bus-stops/{stop_id}",
@@ -819,6 +980,47 @@ async def get_live_bus_locations(
         
     return response_data
 
+@router.post(
+    "/incidents",
+    response_model=IncidentResponse,
+    summary="Create a new incident as admin",
+    description="Allows an admin to create a new incident on behalf of others."
+)
+async def admin_create_incident(
+    incident_data: IncidentCreate,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_admin)
+):
+    try:
+        incident_data_dict = incident_data.dict()
+        incident_data_dict["reported_by_id"] = current_user.id
+        incident_data_dict["school_id"] = current_user.school_id
+        
+        if incident_data.student_id:
+            student = await get_student_by_id(db, incident_data.student_id)
+            if student.school_id != current_user.school_id:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Student does not belong to your school."
+                )
+        
+        incident = await create_incident(db, incident_data_dict)
+        
+        if incident.student_id:
+            await notify_guardians_incident(
+                db,
+                incident.student_id,
+                incident.type,
+                incident.description
+            )
+        
+        return incident
+    except NotFoundException as e:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=e.message
+        )
+
 @router.get(
     "/incidents",
     response_model=List[dict],
@@ -826,15 +1028,21 @@ async def get_live_bus_locations(
     description="Allows admin to view all incidents with related trip and bus details."
 )
 async def admin_get_all_incidents(
-    school_id: Optional[int] = None,
     status: Optional[str] = None,
     skip: int = 0,
     limit: int = 100,
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_admin) # Add this line
 ):
     # Fetch incidents with optional filters
-    incidents = await get_incidents(db, school_id=school_id, status=status, skip=skip, limit=limit)
-    
+    incidents = await get_incidents(
+        db,
+        school_id=current_user.school_id, # Change to use the current user's school ID
+        status=status,
+        skip=skip,
+        limit=limit
+    )
+
     result_list = []
     for incident in incidents:
         trip_id = None
@@ -847,11 +1055,48 @@ async def admin_get_all_incidents(
             if trip:
                 trip_id = trip.id
                 bus_id = trip.bus_id
-        
+
         result_list.append({
             "incident": IncidentResponse.from_orm(incident),
             "trip_id": trip_id,
             "bus_id": bus_id
         })
-    
+
     return result_list
+
+@router.patch(
+    "/incidents/{incident_id}",
+    response_model=IncidentResponse,
+    summary="Update an existing incident"
+)
+async def admin_update_incident(
+    incident_id: int,
+    incident_data: IncidentUpdate,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_admin)
+):
+    # Security check: ensure the incident belongs to the admin's school
+    incident_to_update = await get_incident_by_id(db, incident_id)
+    if incident_to_update.school_id != current_user.school_id:
+        raise HTTPException(status_code=403, detail="Not authorized to update this incident")
+        
+    return await update_incident(db, incident_id, incident_data)
+
+# NEW: Endpoint to handle DELETING an incident
+@router.delete(
+    "/incidents/{incident_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    summary="Delete an incident"
+)
+async def admin_delete_incident(
+    incident_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_admin)
+):
+    # Security check: ensure the incident belongs to the admin's school
+    incident_to_delete = await get_incident_by_id(db, incident_id)
+    if incident_to_delete.school_id != current_user.school_id:
+        raise HTTPException(status_code=403, detail="Not authorized to delete this incident")
+        
+    await delete_incident(db, incident_id)
+    return Response(status_code=status.HTTP_204_NO_CONTENT)

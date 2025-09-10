@@ -51,3 +51,6 @@ class Incident(Base):
     # Resolver association (if applicable)
     resolved_by_id = Column(Integer, ForeignKey("users.id"), nullable=True)
     resolved_by = relationship("User", back_populates="incidents_resolved", foreign_keys=[resolved_by_id])
+    
+    driver_id = Column(Integer, ForeignKey("users.id"), nullable=True)
+    bus_id = Column(Integer, ForeignKey("buses.id"), nullable=True)

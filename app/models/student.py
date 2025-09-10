@@ -1,7 +1,8 @@
 from sqlalchemy import Column, Integer, String, Text, DateTime, ForeignKey, Boolean, Date
 from sqlalchemy.sql import func
 from sqlalchemy.orm import relationship
-
+from typing import Optional
+from datetime import datetime
 from app.db.base import Base
 
 
@@ -47,7 +48,7 @@ class Guardian(Base):
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
     
     user = relationship("User", back_populates="guardian_students")
-    students = relationship("GuardianStudent", back_populates="guardian")
+    students = relationship("GuardianStudent", back_populates="guardian", cascade="all, delete-orphan")
 
 
 class GuardianStudent(Base):
@@ -62,3 +63,4 @@ class GuardianStudent(Base):
     
     guardian = relationship("Guardian", back_populates="students")
     student = relationship("Student", back_populates="guardians")
+    

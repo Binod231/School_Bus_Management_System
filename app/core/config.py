@@ -19,6 +19,7 @@ class Settings(BaseSettings):
     
     # Frontend
     BACKEND_URL: str = os.getenv("BACKEND_URL", "http://localhost:8000")
+    FRONTEND_URL: str = os.getenv("FRONTEND_URL", "http://localhost:3000")
     
     # Email
     SMTP_SERVER: str = os.getenv("SMTP_SERVER", "")
