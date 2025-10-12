@@ -48,6 +48,7 @@ This is a comprehensive school bus management system built with FastAPI. It prov
 ---
 
 ## Project Structure
+```bash
 school_bus_management/
 ├── app/
 │   ├── core/
@@ -65,7 +66,7 @@ school_bus_management/
 ├── docker-compose.yml
 ├── Dockerfile
 └── requirements.txt
----
+```
 
 ## Setup and Installation
 
