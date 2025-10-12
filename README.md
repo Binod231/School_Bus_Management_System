@@ -2,6 +2,7 @@
 
 This is a comprehensive school bus management system built with FastAPI. It provides a robust platform for managing school bus routes, tracking buses in real-time, and facilitating communication between school administration, drivers, and guardians.
 
+---
 
 ## Features
 
@@ -47,7 +48,6 @@ This is a comprehensive school bus management system built with FastAPI. It prov
 ---
 
 ## Project Structure
-
 school_bus_management/
 ├── app/
 │   ├── core/
@@ -65,8 +65,6 @@ school_bus_management/
 ├── docker-compose.yml
 ├── Dockerfile
 └── requirements.txt
-
-
 ---
 
 ## Setup and Installation
@@ -79,27 +77,28 @@ school_bus_management/
 
 ### 1. Clone the repository
 
-bash
+```bash
 git clone <repository-url>
 cd school_bus_management
+```
 2. Create a virtual environment
-Bash
-
+```bash
 python3 -m venv venv
 source venv/bin/activate
+```
 3. Install dependencies
-Bash
-
+```bash
 pip install -r requirements.txt
+```
 4. Set up the database
-Make sure you have a PostgreSQL server running. You can use the provided docker-compose.yml file for this.
+Ensure that a PostgreSQL server is running. You can use the provided docker-compose.yml file for this.
 
 5. Environment Variables
-Copy the .env.example file to .env and update the values as needed.
+Copy the .env example file to .env and update the values as needed.
 
-Bash
-
+```bash
 cp .env.example .env
+```
 Key variables to update:
 
 DATABASE_URL: The connection string for your PostgreSQL database.
@@ -114,9 +113,10 @@ How to Run
 Using Docker Compose (Recommended)
 This is the easiest way to get the entire stack (FastAPI app, PostgreSQL, Redis) up and running.
 
-Bash
+```bash
 
 docker-compose up --build
+```
 The application will be available at http://localhost:8000.
 
 Using Uvicorn (for development)
@@ -124,20 +124,19 @@ If you prefer to run the FastAPI app directly on your host machine:
 
 Start the database and Redis:
 
-Bash
-
+```bash
 docker-compose up -d school_bus_db redis
+```
 Run the database migrations:
-
-Bash
+```bash
 
 alembic upgrade head
 Start the FastAPI server:
 
-Bash
-
 uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+```
 API Documentation
 Once the application is running, you can access the interactive API documentation at http://localhost:8000/docs.
 
-This will provide a complete list of all available API endpoints, their parameters, and response models.
+This will provide a comprehensive list of all available API endpoints, including their parameters and response models.
+
