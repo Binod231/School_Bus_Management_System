@@ -2,7 +2,6 @@
 
 This is a comprehensive school bus management system built with FastAPI. It provides a robust platform for managing school bus routes, tracking buses in real-time, and facilitating communication between school administration, drivers, and guardians.
 
----
 
 ## Features
 
@@ -80,7 +79,7 @@ school_bus_management/
 
 ### 1. Clone the repository
 
-```bash
+bash
 git clone <repository-url>
 cd school_bus_management
 2. Create a virtual environment
