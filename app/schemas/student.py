@@ -34,6 +34,7 @@ class StudentUpdate(BaseModel):
     bus_route_id: Optional[int] = None
     bus_stop_id: Optional[int] = None
     is_active: Optional[bool] = None
+    qr_code: Optional[str] = None
 
 class GuardianForStudentResponse(BaseModel):
     id: int

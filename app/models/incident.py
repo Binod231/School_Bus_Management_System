@@ -54,3 +54,6 @@ class Incident(Base):
     
     driver_id = Column(Integer, ForeignKey("users.id"), nullable=True)
     bus_id = Column(Integer, ForeignKey("buses.id"), nullable=True)
+    trip_id = Column(Integer, ForeignKey("trips.id"), nullable=True)
+    trip = relationship("Trip", back_populates="incidents")
+    

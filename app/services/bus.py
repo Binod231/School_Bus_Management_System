@@ -1,6 +1,6 @@
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, update, delete, func
-from sqlalchemy.orm import selectinload
+from sqlalchemy.orm import selectinload, Session
 from app.models.bus import Bus, BusRoute, BusStop, BusRouteStop, BusDriver
 from app.schemas.bus import BusCreate, BusUpdate, BusRouteCreate, BusRouteUpdate
 from app.core.exceptions import NotFoundException
@@ -8,7 +8,7 @@ from typing import Optional, List
 from app.core.cache import redis_client
 import json
 from datetime import datetime
-
+from app import models
 # Helper to serialize Bus objects, handling datetime
 def bus_serializer(bus: Bus) -> dict:
     bus_dict = {c.name: getattr(bus, c.name) for c in bus.__table__.columns}
@@ -266,3 +266,4 @@ async def add_stop_to_route(db: AsyncSession, route_stop_data: dict) -> BusRoute
     await db.commit()
     await db.refresh(db_route_stop)
     return db_route_stop
+

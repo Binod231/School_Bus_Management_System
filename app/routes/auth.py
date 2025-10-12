@@ -6,7 +6,7 @@ from app.db.session import get_db
 from app.core.config import settings
 from app.core.security import create_access_token, create_refresh_token, verify_password, get_password_hash
 from app.services.user import create_refresh_token as create_db_refresh_token, authenticate_user, get_user_by_id, get_refresh_token, revoke_refresh_token, get_user_by_email, revoke_all_user_tokens
-from app.schemas.user import Token, UserCreate, UserResponse
+from app.schemas.user import Token, UserCreate, UserResponse, PasswordResetRequest, PasswordResetConfirm
 from app.models.user import UserRole, User
 from app.core.exceptions import NotFoundException
 from app.core.jwt import get_current_active_user
@@ -148,37 +148,39 @@ async def refresh_token(
 
 @router.post("/forgot-password")
 async def forgot_password(
-    email: str,
+    request_data: PasswordResetRequest, # CHANGE THIS LINE
     db: AsyncSession = Depends(get_db)
 ):
     from app.utils.email import send_password_reset_email
-    
+
     try:
-        user = await get_user_by_email(db, email=email)
-        
+        # And CHANGE THIS LINE to access the email from the request data
+        user = await get_user_by_email(db, email=request_data.email) 
+
         reset_token_expires = timedelta(minutes=30)
         reset_token = create_access_token(
             data={"sub": str(user.id), "purpose": "password_reset"},
             expires_delta=reset_token_expires
         )
-        
+
         await send_password_reset_email(user.email, reset_token)
     except NotFoundException:
         pass
-    
+
     return {"message": "If the email exists, a password reset link has been sent"}
 
 
 @router.post("/reset-password")
 async def reset_password(
-    token: str,
-    new_password: str,
+    # CHANGE THIS: Use the Pydantic schema for the request body
+    reset_data: PasswordResetConfirm,
     db: AsyncSession = Depends(get_db)
 ):
     from app.core.security import decode_token
     from app.services.user import update_user
     
-    payload = decode_token(token)
+    # CHANGE THIS: Access data from the schema object
+    payload = decode_token(reset_data.token)
     if not payload or payload.get("purpose") != "password_reset":
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -200,11 +202,11 @@ async def reset_password(
             detail="User not found or inactive"
         )
     
-    hashed_password = get_password_hash(new_password)
+    # CHANGE THIS: Access data from the schema object
+    hashed_password = get_password_hash(reset_data.new_password)
     await update_user(db, user_id=user.id, user_data={"hashed_password": hashed_password})
     
     return {"message": "Password has been reset successfully"}
-
 
 @router.post(
     "/logout",
@@ -224,3 +226,5 @@ async def read_users_me(current_user: User = Depends(get_current_active_user)):
     Get current logged-in user.
     """
     return current_user
+
+

@@ -108,20 +108,22 @@ async def get_live_bus_locations(
         latest_location = latest_updates.get(trip.id)
         
         result.append({
+            "id": trip.bus.id, # Use bus ID for the key
             "trip_id": trip.id,
             "trip_name": trip.name,
             "bus_number": trip.bus.bus_number,
-            "driver_name": f"{trip.driver.first_name} {trip.driver.last_name}",
+            "driver_name": f"{trip.driver.first_name} {trip.driver.last_name}" if trip.driver else "N/A",
+            "driver_phone": trip.driver.phone if trip.driver else "N/A",
             "route_name": trip.route.name,
             "status": trip.status,
             "latest_location": {
-                "latitude": latest_location.latitude if latest_location else None,
-                "longitude": latest_location.longitude if latest_location else None,
-                "timestamp": latest_location.timestamp if latest_location else None,
-                "speed": latest_location.speed if latest_location else None,
-                "heading": latest_location.heading if latest_location else None
+                "latitude": float(latest_location.latitude) if latest_location else None,
+                "longitude": float(latest_location.longitude) if latest_location else None,
+                "timestamp": latest_location.timestamp.isoformat() if latest_location else None,
+                "speed": float(latest_location.speed) if latest_location and latest_location.speed else 0,
+                "heading": float(latest_location.heading) if latest_location and latest_location.heading else 0
             } if latest_location else None,
-            "students_on_board": len([ts for ts in trip.students if ts.status == "on_bus"])
+            "students_count": len([ts for ts in trip.students if ts.status == "on_bus"])
         })
     
     return result
@@ -144,12 +146,12 @@ async def get_bus_status_overview(
         )
     )
     
-    active_trips = await db.scalar(
-        select(func.count(Trip.id)).where(
-            Trip.status == "in_progress"
-        )
+    active_trips_query = select(func.count(Trip.id)).join(BusRoute).where(
+        BusRoute.school_id == school_id,
+        Trip.status == "in_progress"
     )
-    
+    active_trips = await db.scalar(active_trips_query)
+
     today_start = datetime.combine(date.today(), datetime.min.time())
     today_end = datetime.combine(date.today(), datetime.max.time())
     

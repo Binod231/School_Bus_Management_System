@@ -1,4 +1,4 @@
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 from typing import Optional, List
 from datetime import datetime
 from app.schemas.user import UserResponse
@@ -151,3 +151,27 @@ class BusWithDriversResponse(BusResponse):
 
 class BusRouteWithStopsResponse(BusRouteResponse):
     stops: List[BusRouteStopResponse] = []
+    
+class LocationState(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    latitude: float
+    longitude: float
+    timestamp: datetime
+    speed: Optional[float] = None
+    heading: Optional[float] = None
+
+class ActiveBusLocation(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str
+    bus_number: str
+    driver_name: str
+    driver_phone: Optional[str] = None
+    route_name: str
+    current_location: Optional[LocationState] = None
+    status: str
+    trip_id: str
+    total_students: int
+    boarded_students: int
+    arrived_students: int

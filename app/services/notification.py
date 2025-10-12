@@ -3,6 +3,7 @@ from app.utils.fcm import send_push_notification, send_student_boarding_notifica
 from app.utils.email import send_notification_email
 from app.services.student import get_students_by_bus_route, get_student_guardians
 from typing import List, Optional
+from app.services.trip import get_trip_by_id
 
 
 async def notify_guardians_student_boarding(
@@ -149,6 +150,38 @@ async def notify_guardians_arrival(
             "Student Arrived",
             f"Your child has arrived at {location} at {time}"
         )
+
+async def notify_guardians_of_trip_incident(
+    db: AsyncSession,
+    trip_id: int,
+    incident_type: str,
+    details: str
+):
+    """Notify all guardians of students on a specific trip about an incident."""
+    try:
+        trip = await get_trip_by_id(db, trip_id)
+        if not trip:
+            return
+
+        # Use the already loaded students from the trip object
+        students_on_trip = [ts.student for ts in trip.students]
+        
+        for student in students_on_trip:
+            guardians = await get_student_guardians(db, student.id)
+            guardian_tokens = [g.fcm_token for g in guardians if g.fcm_token]
+            guardian_emails = [g.user.email for g in guardians if g.user.email]
+
+            title = f"Incident Alert on Trip: {incident_type.replace('_', ' ').title()}"
+            message = f"An incident ('{details}') has been reported for the trip '{trip.name}' involving bus {trip.bus.bus_number}."
+            
+            if guardian_tokens:
+                await send_push_notification(guardian_tokens, title, message)
+
+            for email in guardian_emails:
+                await send_notification_email(email, student.first_name, title, message)
+
+    except Exception as e:
+        print(f"Error notifying guardians of trip incident: {e}")
 
 
 async def notify_admin_arrival_confirmation(

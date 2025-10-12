@@ -7,7 +7,7 @@ from app.db.session import get_db
 from app.core.jwt import get_current_superadmin
 from app.schemas.school import SchoolCreate, SchoolResponse, SchoolUpdate
 from app.schemas.user import UserCreate, UserResponse, UserUpdate
-from app.services.school import create_school, get_schools, get_school_by_id, update_school, delete_school, get_schools_with_admin_status, get_school_by_id_with_admin_status
+from app.services.school import create_school, update_school, delete_school, get_schools_with_admin_status, get_school_by_id_with_admin_status
 from app.services.user import create_user, get_user_by_email, get_users, get_user_by_id, update_user, delete_user
 from app.models.user import UserRole, User
 from app.models.school import School
@@ -155,7 +155,7 @@ async def create_school_admin(
         pass  # Email doesn't exist, continue
 
     try:
-        school = await get_school_by_id(db, school_id)
+        school = await get_school_by_id_with_admin_status(db, school_id)
     except NotFoundException as e:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -183,7 +183,7 @@ async def get_school_admins(
 ):
     # Verify school exists first
     try:
-        await get_school_by_id(db, school_id)
+        await get_school_by_id_with_admin_status(db, school_id)
     except NotFoundException as e:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,

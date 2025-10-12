@@ -15,7 +15,7 @@ from app.models.user import UserRole, User
 from app.models.incident import Incident
 from app.models.student import Student
 from app.models.bus import Bus
-from app.models.trip import Trip
+from app.models.trip import Trip, TripStudent, StudentStatus
 from sqlalchemy import func, select
 from app.services.student import create_guardian_student, GuardianStudent, create_guardian, get_guardians, get_guardian_by_user_id, delete_guardian_by_user_id,  update_student as update_student_service,delete_student as delete_student_service, get_student_by_id, get_guardian_by_id
 from app.schemas.bus import BusStopCreate, BusStopUpdate, BusStopResponse, BusRouteResponse
@@ -26,11 +26,13 @@ from fastapi.responses import Response
 from app.schemas.trip import TripResponse
 from app.services.incident import get_incidents, create_incident, update_incident, get_incident_by_id, delete_incident
 from app.schemas.incident import IncidentResponse, IncidentUpdate, IncidentCreate
-from sqlalchemy.orm import selectinload, Session
+from sqlalchemy.orm import selectinload, Session, joinedload
 from app.models.student import Guardian
-from app.services.student import get_guardian_students
-from app import models
+from app.services.student import get_guardian_students, get_students_by_bus_route
+from app import models, services, schemas
 from app.services.notification import notify_guardians_incident
+from app.utils.qrcode import generate_student_qr_code
+
 
 
 
@@ -1021,6 +1023,8 @@ async def admin_create_incident(
             detail=e.message
         )
 
+# In school_bus_management/app/routes/admin.py
+
 @router.get(
     "/incidents",
     response_model=List[dict],
@@ -1032,34 +1036,46 @@ async def admin_get_all_incidents(
     skip: int = 0,
     limit: int = 100,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_admin) # Add this line
+    current_user: User = Depends(get_current_admin)
 ):
-    # Fetch incidents with optional filters
-    incidents = await get_incidents(
-        db,
-        school_id=current_user.school_id, # Change to use the current user's school ID
-        status=status,
-        skip=skip,
-        limit=limit
+    # Use a query with proper eager loading
+    query = (
+        select(Incident)
+        .options(
+            selectinload(Incident.trip).selectinload(Trip.bus),
+            selectinload(Incident.trip).selectinload(Trip.route),
+            selectinload(Incident.trip).selectinload(Trip.students).selectinload(TripStudent.student).selectinload(Student.guardians).selectinload(GuardianStudent.guardian).selectinload(Guardian.user),
+            joinedload(Incident.student),
+            selectinload(Incident.reported_by)
+        )
+        .where(Incident.school_id == current_user.school_id)
+        .order_by(Incident.reported_at.desc())
+        .offset(skip)
+        .limit(limit)
     )
+    
+    if status is not None:
+        query = query.where(Incident.status == status)
+    
+    result = await db.execute(query)
+    incidents = result.scalars().unique().all()
 
     result_list = []
     for incident in incidents:
         trip_id = None
         bus_id = None
-        # If incident is associated with a student, try to get their trip
-        if incident.student_id:
-            trip_query = select(Trip).where(Trip.route_id == incident.student.bus_route_id).limit(1)
-            trip_result = await db.execute(trip_query)
-            trip = trip_result.scalar_one_or_none()
-            if trip:
-                trip_id = trip.id
-                bus_id = trip.bus_id
+        
+        # Get trip and bus info if needed (without triggering lazy loading)
+        if incident.trip_id:
+            trip_id = incident.trip_id
+        
+        is_driver_reported = incident.reported_by.role == UserRole.DRIVER if incident.reported_by else False
 
         result_list.append({
             "incident": IncidentResponse.from_orm(incident),
             "trip_id": trip_id,
-            "bus_id": bus_id
+            "bus_id": bus_id,
+            "is_driver_reported": is_driver_reported
         })
 
     return result_list
@@ -1100,3 +1116,145 @@ async def admin_delete_incident(
         
     await delete_incident(db, incident_id)
     return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+@router.post(
+    "/students/{student_id}/generate-qr",
+    response_model=StudentResponse,
+    summary="Generate and save a QR code for a student",
+    description="Generates a new QR code for the specified student and saves it to their profile."
+)
+async def generate_qr_for_student(
+    student_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_admin)
+):
+    try:
+        # First, ensure the student exists and belongs to the admin's school
+        student_to_update = await get_student_by_id(db, student_id)
+        if student_to_update.school_id != current_user.school_id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="You do not have permission to access this student."
+            )
+
+        # Generate the QR code string
+        qr_code_string = await generate_student_qr_code(student_id, db)
+
+        if not qr_code_string:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Failed to generate QR code."
+            )
+
+        # CORRECTED LINE: Call update_student with named arguments to ensure correct order
+        updated_student = await update_student(
+            student_id=student_id, 
+            student_data=StudentUpdate(qr_code=qr_code_string), 
+            db=db,
+            current_user=current_user # Pass the current_user as well
+        )
+        
+        return updated_student
+
+    except NotFoundException as e:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
+    
+    
+    
+@router.post("/trips/backfill-students", summary="[Admin] Backfill students for old trips")
+async def backfill_students_for_old_trips(
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_admin)
+):
+    """
+    This is a one-time utility endpoint to find trips created before the student
+    association logic was added and populate their rosters.
+    """
+    # Find all trips that have no associated students
+    subquery = select(TripStudent.trip_id).distinct()
+    
+    # FIX: Eagerly load the 'route' relationship to prevent lazy loading errors
+    query = select(Trip).options(selectinload(Trip.route)).where(Trip.id.notin_(subquery))
+    
+    result = await db.execute(query)
+    trips_to_fix = result.scalars().unique().all()
+
+    if not trips_to_fix:
+        return {"message": "No trips found that need fixing."}
+
+    newly_added_associations = 0
+    for trip in trips_to_fix:
+        # This check is now safe because trip.route was pre-loaded
+        if trip.route and trip.route.school_id == current_user.school_id:
+            students_on_route = await get_students_by_bus_route(db, trip.route_id)
+            for student in students_on_route:
+                # Check if an association already exists (just in case)
+                existing_association_result = await db.execute(
+                    select(TripStudent).where(
+                        TripStudent.trip_id == trip.id,
+                        TripStudent.student_id == student.id
+                    )
+                )
+                if existing_association_result.scalar_one_or_none() is None:
+                    trip_student_entry = TripStudent(
+                        trip_id=trip.id,
+                        student_id=student.id,
+                        status=StudentStatus.AT_HOME
+                    )
+                    db.add(trip_student_entry)
+                    newly_added_associations += 1
+    
+    await db.commit()
+    
+    return {
+        "message": f"Data backfill complete. Fixed {len(trips_to_fix)} trips and added {newly_added_associations} student associations."
+    }
+    
+@router.get(
+    "/schools/{school_id}/live-locations",
+    response_model=List[schemas.bus.ActiveBusLocation] 
+)
+async def get_all_bus_locations(
+    school_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_user: models.user.User = Depends(get_current_admin)
+):
+    """
+    Get live locations for all active buses by fetching active trips,
+    including detailed student counts.
+    """
+    active_trips = await services.trip.get_active_trips_with_locations(db=db, school_id=school_id)
+    
+    response_data = []
+    for trip in active_trips:
+        driver = trip.driver
+        latest_location = sorted(trip.location_updates, key=lambda lu: lu.timestamp, reverse=True)[0] if trip.location_updates else None
+        
+        
+        
+        # Calculate the different student counts
+        total_students = len(trip.students)
+        boarded_students = sum(1 for ts in trip.students if ts.boarded_at is not None)
+        arrived_students = sum(1 for ts in trip.students if ts.status == "at_home" and ts.boarded_at is not None)
+        
+      
+
+        response_data.append({
+            "id": str(trip.bus.id),
+            "bus_number": trip.bus.bus_number,
+            "driver_name": f"{driver.first_name} {driver.last_name}" if driver else "N/A",
+            "driver_phone": driver.phone if driver else "N/A",
+            "route_name": trip.route.name if trip.route else "N/A",
+            "current_location": latest_location,
+            "status": trip.status,
+            "trip_id": str(trip.id),
+
+            #  'students_count' with the new detailed fields
+            "total_students": total_students,
+            "boarded_students": boarded_students,
+            "arrived_students": arrived_students
+            
+            
+        })
+        
+    return response_data

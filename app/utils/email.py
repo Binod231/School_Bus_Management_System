@@ -40,7 +40,7 @@ async def send_password_reset_email(email: str, reset_token: str):
     """Send password reset email"""
     subject = "Password Reset Request - School Bus Management System"
     # Use the configurable frontend URL
-    reset_url = f"{settings.BACKEND_URL}/reset-password?token={reset_token}"
+    reset_url = f"{settings.FRONTEND_URL}/reset-password?token={reset_token}"
     
     body = f"""
     <html>

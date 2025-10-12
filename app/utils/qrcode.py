@@ -31,7 +31,7 @@ async def generate_student_qr_code(student_id: int, db: AsyncSession):
     
     # Convert to base64
     buffered = io.BytesIO()
-    img.save(buffered, format="PNG")
+    img.save(buffered, "PNG")
     img_str = base64.b64encode(buffered.getvalue()).decode()
     
     return f"data:image/png;base64,{img_str}"

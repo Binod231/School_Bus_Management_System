@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, Text, DateTime, ForeignKey, Boolean, Enum
+from sqlalchemy import Column, Integer, String, Text, DateTime, ForeignKey, Boolean, Enum, Float
 from sqlalchemy.sql import func
 from sqlalchemy.orm import relationship
 import enum
@@ -16,9 +16,12 @@ class TripStatus(str, enum.Enum):
 class TripType(str, enum.Enum):
     MORNING = "morning"
     AFTERNOON = "afternoon"
+    EVENING = "evening"
     SPECIAL = "special"
 
-
+class TripDirection(str, enum.Enum):
+    TO_SCHOOL = "to_school"
+    FROM_SCHOOL = "from_school"
 class StudentStatus(str, enum.Enum):
     AT_HOME = "at_home"
     ON_BUS = "on_bus"
@@ -31,6 +34,7 @@ class Trip(Base):
     id = Column(Integer, primary_key=True, index=True)
     name = Column(String, nullable=False)
     type = Column(Enum(TripType), nullable=False)
+    direction = Column(Enum(TripDirection), nullable=False)
     status = Column(Enum(TripStatus), default=TripStatus.SCHEDULED)
     scheduled_start = Column(DateTime(timezone=True), nullable=False)
     actual_start = Column(DateTime(timezone=True), nullable=True)
@@ -54,6 +58,7 @@ class Trip(Base):
     # Relationships
     students = relationship("TripStudent", back_populates="trip")
     location_updates = relationship("LocationUpdate", back_populates="trip")
+    incidents = relationship("Incident", back_populates="trip", cascade="all, delete-orphan")
 
 
 class TripStudent(Base):
@@ -77,10 +82,10 @@ class LocationUpdate(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     trip_id = Column(Integer, ForeignKey("trips.id"), nullable=False)
-    latitude = Column(String, nullable=False)
-    longitude = Column(String, nullable=False)
-    speed = Column(String, nullable=True)
-    heading = Column(String, nullable=True)
+    latitude = Column(Float, nullable=False)
+    longitude = Column(Float, nullable=False)
+    speed = Column(Float, nullable=True)
+    heading = Column(Float, nullable=True)
     timestamp = Column(DateTime(timezone=True), server_default=func.now())
     
     trip = relationship("Trip", back_populates="location_updates")

@@ -3,7 +3,8 @@ from sqlalchemy import select
 from app.models.user import User, RefreshToken
 from app.core.security import verify_password, get_password_hash
 from datetime import datetime, timedelta
-
+from app.core.jwt import decode_access_token
+from app.services.user import get_user_by_id
 
 async def authenticate_user(db: AsyncSession, email: str, password: str):
     """Authenticate a user with email and password"""
@@ -63,3 +64,4 @@ async def revoke_all_user_tokens(db: AsyncSession, user_id: int):
     
     await db.commit()
     return tokens
+

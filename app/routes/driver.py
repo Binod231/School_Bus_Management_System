@@ -1,25 +1,38 @@
+# school_bus_management/app/routes/driver.py
+
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 from typing import List
 from app.db.session import get_db
-from app.core.jwt import get_current_driver, verify_school_resource_access
-from app.schemas.trip import TripCreate, TripResponse, TripUpdate, TripStudentUpdate, LocationUpdateCreate, LocationUpdateResponse, TripStudentResponse
+from app.core.jwt import get_current_driver, get_current_active_user
+# CORRECTED: Import UserResponse, not DriverResponse
+from app.schemas.user import UserResponse, UserRole
+from app.schemas.trip import TripCreate, TripResponse, TripUpdate, TripStudentUpdate, LocationUpdateCreate, LocationUpdateResponse, TripStudentResponse, MarkStudentsBoardedRequest
 from app.schemas.student import StudentResponse
-from app.schemas.bus import BusResponse, BusRouteResponse # Import bus schemas
-from app.services.trip import create_trip, get_driver_trips, get_trip_by_id, update_trip, get_trip_students, update_trip_student, create_location_update, mark_all_students_boarded
+from app.schemas.bus import BusResponse, BusRouteResponse
+from app.services.trip import create_trip, get_driver_trips, get_trip_by_id, update_trip, get_trip_students, update_trip_student, create_location_update, get_all_active_trips_for_driver, mark_students_boarded
 from app.services.student import get_students_by_bus_route, get_student_by_id, get_student_guardians
 from app.services.notification import notify_guardians_student_boarding
 from app.utils.qrcode import verify_student_qr_code
-from app.services.bus import get_bus_by_id, get_bus_route_by_id, get_bus_drivers, get_buses, get_bus_routes # Import bus services
+from app.services.bus import get_bus_by_id, get_bus_route_by_id, get_bus_drivers, get_buses, get_bus_routes
 from app.core.exceptions import NotFoundException, InvalidDataException
-from app.models.trip import StudentStatus
+from app.models.trip import StudentStatus, TripStudent
+from sqlalchemy import select, func
 from datetime import datetime
 from app.utils.websocket import manager
-from app.schemas.user import UserRole
 from app.services.user import get_users
-from app.schemas.incident import IncidentCreate, IncidentResponse
-from app.services.incident import create_incident, get_incident_by_id, update_incident, delete_incident, get_user_reported_incidents
-from app.schemas.incident import IncidentUpdate
+from app.schemas.incident import IncidentResponse, IncidentUpdate, IncidentCreateForDriver, IncidentUpdateForDriver
+from app.models.student import Student
+from app.models.bus import BusRoute
+from app.models.student import GuardianStudent, Guardian
+from sqlalchemy.orm import selectinload
+from app.services.trip import get_trip_students, delete_trip, update_student_status_on_trip
+from app.services.incident import get_driver_incidents
+from app.models.user import User
+from app.services.bus import Bus
+from app.services.incident import  get_incident_by_id, update_incident_for_driver, delete_incident
+from app.services.notification import notify_guardians_of_trip_incident, notify_guardians_incident
+from app.services.incident import  get_incident_by_id, update_incident, delete_incident, get_user_reported_incidents, create_incident_for_driver
 
 router = APIRouter(
     prefix="/driver",
@@ -27,7 +40,59 @@ router = APIRouter(
     dependencies=[Depends(get_current_driver)]
 )
 
-# NEW: Endpoint for drivers to get a list of buses in their school
+
+@router.get(
+    "/me",
+    response_model=UserResponse, 
+    summary="Get current driver profile",
+    description="Retrieves the profile of the currently logged-in driver."
+)
+async def get_my_profile(
+    current_user = Depends(get_current_driver)
+):
+    return current_user
+
+# RESTORED: Endpoint to get the currently active trip
+@router.get(
+    "/trips/active",
+    response_model=List[TripResponse], # <-- Changed to List
+    summary="Get all active trips",
+    description="Retrieves all currently active trips for the driver."
+)
+async def get_active_trips( # Renamed function for clarity
+    db: AsyncSession = Depends(get_db),
+    current_user = Depends(get_current_driver)
+):
+    active_trips = await get_all_active_trips_for_driver(db, driver_id=current_user.id)
+    return active_trips
+
+# endpoint to get a single trip's details
+@router.get(
+    "/trips/{trip_id}",
+    response_model=TripResponse,
+    summary="Get Trip Details",
+    description="Retrieve the full details of a specific trip, including students."
+)
+async def get_trip_details_endpoint(
+    trip_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_driver)
+):
+    """
+    Get a single trip by its ID, ensuring the driver is authorized.
+    """
+    try:
+        trip = await get_trip_by_id(db, trip_id)
+        if trip.driver_id != current_user.id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="You do not have permission to view this trip."
+            )
+        return trip
+    except NotFoundException as e:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
+
+# Your endpoint for drivers to get a list of buses
 @router.get(
     "/buses",
     response_model=List[BusResponse],
@@ -41,7 +106,7 @@ async def list_buses_for_driver(
     buses = await get_buses(db, school_id=current_user.school_id)
     return buses
 
-# NEW: Endpoint for drivers to get a list of routes in their school
+# KEPT: Your endpoint for drivers to get a list of routes
 @router.get(
     "/routes",
     response_model=List[BusRouteResponse],
@@ -57,7 +122,7 @@ async def list_routes_for_driver(
 
 
 @router.post(
-    "/trips", 
+    "/trips",
     response_model=TripResponse,
     summary="Start a new trip",
     description="Allows a driver to start a new trip, provided they are assigned to the bus and have access to the route."
@@ -75,40 +140,33 @@ async def start_trip(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=e.message
         )
-    
-    if bus.school_id != current_user.school_id:
+
+    if bus.school_id != current_user.school_id or route.school_id != current_user.school_id:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Bus doesn't belong to your school"
+            detail="Bus or Route doesn't belong to your school"
         )
-    
-    if route.school_id != current_user.school_id:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Route doesn't belong to your school"
-        )
-    
+
     drivers = await get_bus_drivers(db, trip_data.bus_id)
     driver_assigned = any(driver.driver_id == current_user.id for driver in drivers)
-    
+
     if not driver_assigned:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="You are not assigned to this bus"
         )
-    
+
     trip_data_dict = trip_data.dict()
     trip_data_dict["driver_id"] = current_user.id
-    
+
     trip = await create_trip(db, trip_data=trip_data_dict)
     return trip
 
 
 @router.get(
-    "/trips", 
+    "/trips",
     response_model=List[TripResponse],
-    summary="List all trips for the driver",
-    description="Retrieves a list of all trips assigned to the current driver, ordered by scheduled start time."
+    summary="List all trips for the driver"
 )
 async def list_trips(
     skip: int = 0,
@@ -117,11 +175,23 @@ async def list_trips(
     current_user = Depends(get_current_driver)
 ):
     trips = await get_driver_trips(db, driver_id=current_user.id, skip=skip, limit=limit)
+    
+    # Add student count to each trip
+    for trip in trips:
+        # Get students for this trip's route
+        result = await db.execute(
+            select(func.count(Student.id))
+            .where(Student.bus_route_id == trip.route_id)
+        )
+        student_count = result.scalar()
+        trip.student_count = student_count
+        # You might need to add boarded_count as well if tracking that
+    
     return trips
 
 
 @router.get(
-    "/trips/{trip_id}/students", 
+    "/trips/{trip_id}/students",
     response_model=List[StudentResponse],
     summary="Get students for a specific trip",
     description="Retrieves the list of students assigned to the route of a specific trip."
@@ -138,19 +208,27 @@ async def get_trip_students_list(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=e.message
         )
-    
+
     if trip.driver_id != current_user.id:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="You don't have access to this trip"
         )
+
+    # Get students and eagerly load all required relationships
+    result = await db.execute(
+        select(Student)
+        .where(Student.bus_route_id == trip.route_id)
+        .options(
+            selectinload(Student.bus_route).selectinload(BusRoute.bus),
+            selectinload(Student.guardians).selectinload(GuardianStudent.guardian).selectinload(Guardian.user)
+        )
+    )
+    students = result.scalars().all()
     
-    students = await get_students_by_bus_route(db, trip.route_id)
     return students
-
-
 @router.patch(
-    "/trips/{trip_id}", 
+    "/trips/{trip_id}",
     response_model=TripResponse,
     summary="Update trip status",
     description="Allows a driver to update the status of an ongoing trip (e.g., from 'scheduled' to 'in_progress')."
@@ -168,19 +246,19 @@ async def update_trip_status(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=e.message
         )
-    
+
     if trip.driver_id != current_user.id:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="You don't have access to this trip"
         )
-    
+
     updated_trip = await update_trip(db, trip_id, trip_data.dict(exclude_unset=True))
     return updated_trip
 
 
 @router.patch(
-    "/trips/{trip_id}/students/{student_id}", 
+    "/trips/{trip_id}/students/{student_id}",
     response_model=TripStudentResponse,
     summary="Update student status on a trip",
     description="Allows a driver to mark a student's status on a trip (e.g., 'on_bus' or 'at_school')."
@@ -212,9 +290,9 @@ async def update_student_status(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Student not assigned to this route's trip"
         )
-    
+
     updated_student = await update_trip_student(db, trip_id, student_id, student_data.dict(exclude_unset=True))
-    
+
     if student_data.status == StudentStatus.ON_BUS and student_data.boarded_at:
         await notify_guardians_student_boarding(
             db,
@@ -222,12 +300,12 @@ async def update_student_status(
             bus_number=trip.bus.bus_number,
             time=student_data.boarded_at.strftime("%H:%M")
         )
-    
+
     return updated_student
 
 
 @router.post(
-    "/trips/{trip_id}/location", 
+    "/trips/{trip_id}/location",
     response_model=LocationUpdateResponse,
     summary="Update trip location",
     description="Sends a live location update for an ongoing trip."
@@ -245,49 +323,39 @@ async def update_trip_location(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=e.message
         )
-    
+
     if trip.driver_id != current_user.id:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="You don't have access to this trip"
         )
-    
+
     location_data_dict = location_data.dict()
     location_data_dict["trip_id"] = trip_id
-    
+
     location_update = await create_location_update(db, location_data=location_data_dict)
 
-    # --- Start WebSocket Broadcast Logic ---
-    # 1. Find all admins for the school
-    admins = await get_users(db, school_id=current_user.school_id, role=UserRole.ADMIN)
-    admin_ids = [str(admin.id) for admin in admins]
-
-    # 2. Find all guardians for students on this trip
-    trip_students = await get_trip_students(db, trip_id)
-    guardian_ids = []
-    for ts in trip_students:
-        guardians = await get_student_guardians(db, ts.student_id)
-        for guardian in guardians:
-            guardian_ids.append(str(guardian.user_id))
-
-    # 3. Combine and broadcast
-    recipients = list(set(admin_ids + guardian_ids))
-    message = {
-        "type": "location_update",
-        "trip_id": trip.id,
-        "bus_id": trip.bus_id,
-        "location": {
-            "latitude": float(location_update.latitude),
-            "longitude": float(location_update.longitude),
-            "speed": float(location_update.speed) if location_update.speed else 0,
-            "heading": float(location_update.heading) if location_update.heading else 0,
-            "timestamp": location_update.timestamp.isoformat(),
-        }
-    }
-    await manager.broadcast(message, recipients)
-    # --- End WebSocket Broadcast Logic ---
+    # Fixed parameter order: broadcast(message, room_id)
+    await manager.broadcast(
+        {
+            "type": "location_update",
+            "trip_id": trip.id,
+            "bus_id": trip.bus_id,
+            "location": {
+                "latitude": float(location_update.latitude),
+                "longitude": float(location_update.longitude),
+                "speed": float(location_update.speed) if location_update.speed else 0,
+                "heading": float(location_update.heading) if location_update.heading else 0,
+                "timestamp": location_update.timestamp.isoformat(),
+            }
+        },
+        str(trip_id)
+    )
+    
 
     return location_update
+
+
 
 @router.get("/incidents", response_model=List[IncidentResponse])
 async def list_my_incidents(
@@ -296,7 +364,8 @@ async def list_my_incidents(
     db: AsyncSession = Depends(get_db),
     current_user = Depends(get_current_driver)
 ):
-    incidents = await get_user_reported_incidents(db, user_id=current_user.id, skip=skip, limit=limit)
+    # CHANGE THIS LINE to use the new service function
+    incidents = await get_driver_incidents(db, driver_id=current_user.id, skip=skip, limit=limit)
     return incidents
 
 
@@ -306,51 +375,100 @@ async def list_my_incidents(
     summary="Report a new incident"
 )
 async def report_incident(
-    incident_data: IncidentCreate,
+    incident_data: IncidentCreateForDriver,
     db: AsyncSession = Depends(get_db),
-    current_user = Depends(get_current_driver)
+    current_user: User = Depends(get_current_driver)
 ):
-    incident_dict = incident_data.dict()
-    # Override reporter and school to ensure security
-    incident_dict["reported_by_id"] = current_user.id
-    incident_dict["school_id"] = current_user.school_id
+    # Find the active trip for the driver to associate with the incident
+    active_trips = await get_all_active_trips_for_driver(db, driver_id=current_user.id)
+    
+    if not active_trips:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="You do not have an active trip to report an incident for."
+        )
+    
+    active_trip = active_trips[0]
+    
+    # Set the trip_id directly on the Pydantic model. DO NOT convert to a dict.
+    incident_data.trip_id = active_trip.id
 
-    incident = await create_incident(db, incident_dict)
+    # Call the service function with the updated Pydantic model
+    incident = await create_incident_for_driver(
+        db, 
+        incident_in=incident_data, 
+        user_id=current_user.id,
+        school_id=current_user.school_id 
+    )
+    
+    bus_number = active_trip.bus.bus_number if active_trip.bus else "N/A"
 
-    # Notify all school admins via WebSocket
-    admins = await get_users(db, school_id=current_user.school_id, role="admin")
-    recipients = [str(admin.id) for admin in admins]
-    message = {
-        "type": "incident_reported",
-        "incident": {
-            "id": incident.id,
-            "title": incident.title,
-            "description": incident.description,
-            "type": incident.type,
-            "status": incident.status,
-            "student_id": incident.student_id,
-            "reported_by_id": incident.reported_by_id,
-            "occurred_at": incident.occurred_at.isoformat()
-        }
-    }
-    await manager.broadcast(message, recipients)
+    # If a student is involved, notify only their guardians
+    if incident.student_id:
+        student = await get_student_by_id(db, student_id=incident.student_id)
+        details = f"An incident '{incident.type}' involving your child, {student.first_name}, has been reported. Details: {incident.description}"
+        
+        await notify_guardians_incident(
+            db,
+            student_id=incident.student_id,
+            incident_type=incident.type,
+            details=details
+        )
+    else:
+        # If no student is involved, notify all guardians on the trip
+        details = (
+            f"A general incident ('{incident.type}') has been reported for the trip "
+            f"on Bus {bus_number}. Details: {incident.description}"
+        )
+        await notify_guardians_of_trip_incident(
+            db,
+            trip_id=active_trip.id,
+            incident_type=incident.type,
+            details=details
+        )
 
     return incident
 
-@router.patch("/{incident_id}", response_model=IncidentResponse)
-async def update_my_incident(
+@router.put(
+    "/incidents/{incident_id}",
+    response_model=IncidentResponse,
+    summary="Update an incident reported by the driver"
+)
+async def update_driver_incident(
     incident_id: int,
-    incident_data: IncidentUpdate,
+    incident_data: IncidentUpdateForDriver,
     db: AsyncSession = Depends(get_db),
-    current_user = Depends(get_current_driver)
+    current_user: User = Depends(get_current_driver)
 ):
-    incident = await get_incident_by_id(db, incident_id)
+    """
+    Allows a driver to update an incident they have reported.
+    """
+    # Get the incident from the database - FIX THIS LINE
+    incident = await get_incident_by_id(db, incident_id=incident_id) 
+
+    # Check if the incident exists
+    if not incident:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Incident not found"
+        )
+
+    # Ensure the driver is updating their own incident
     if incident.reported_by_id != current_user.id:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="You can only update incidents you reported")
-    updated_incident = await update_incident(db, incident_id, incident_data.dict(exclude_unset=True))
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You are not authorized to update this incident"
+        )
+
+    # Correctly call the service function
+    updated_incident = await update_incident_for_driver(
+        db,
+        incident_db_obj=incident,  # ✅ Correct parameter name
+        incident_in=incident_data
+    )
+
     return updated_incident
 
-# Delete an incident (only by the driver who reported it)
 @router.delete("/{incident_id}", response_model=dict)
 async def delete_my_incident(
     incident_id: int,
@@ -363,49 +481,67 @@ async def delete_my_incident(
     await delete_incident(db, incident_id)
     return {"message": "Incident deleted successfully"}
 
+
 @router.post(
     "/students/verify-qr",
-    summary="Verify student QR code",
-    description="Allows a driver to scan and verify a student's QR code for boarding."
+    summary="Verify student QR code and board onto active trip",
+    description="Allows a driver to scan and verify a student's QR code, which boards them onto the current active trip."
 )
 async def verify_student_qr(
-    qr_data: str,
+    # FIX: Changed to accept a JSON object, which is standard
+    qr_data: dict, 
     db: AsyncSession = Depends(get_db),
-    current_user = Depends(get_current_driver)
+    current_user: User = Depends(get_current_active_user)
 ):
+    """
+    Verifies a student's QR code. If valid, it finds the driver's single active trip
+    and updates the student's status to 'on_bus' for that trip.
+    """
     try:
-        student = await verify_student_qr_code(qr_data, db)
+        # Pass the actual data string from the JSON object
+        student = await verify_student_qr_code(db, qr_data.get("qr_data"), current_user.school_id)
     except InvalidDataException as e:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=e.message
-        )
-    
-    if student.school_id != current_user.school_id:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Student doesn't belong to your school"
-        )
-    
-    return {
-        "valid": True,
-        "student": {
-            "id": student.id,
-            "first_name": student.first_name,
-            "last_name": student.last_name,
-            "student_id": student.student_id,
-            "grade": student.grade
-        }
-    }
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
 
+    if not student:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Invalid or unrecognized QR Code.")
+
+    if student.school_id != current_user.school_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Student does not belong to your school.")
+
+    # --- This is the critical new logic ---
+    active_trips = await get_all_active_trips_for_driver(db, driver_id=current_user.id)
+    
+    if not active_trips:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="You do not have an active trip to board students onto.")
+    
+    # Ensure there is only one active trip for clarity
+    if len(active_trips) > 1:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Multiple active trips found. Please contact an administrator.")
+    
+    active_trip = active_trips[0]
+
+    # Board the student onto the found active trip
+    updated_trip_student = await update_student_status_on_trip(
+        db,
+        trip_id=active_trip.id,
+        student_id=student.id,
+        status="on_bus"
+    )
+
+    if not updated_trip_student:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Student {student.first_name} is not assigned to this trip.")
+
+    return {"valid": True, "student": student}
 
 @router.post(
-    "/mark-all-boarded",
-    summary="Mark all students as boarded",
-    description="Marks all students assigned to a trip's route as boarded at the current time."
+    "/trips/{trip_id}/mark-boarded",
+    summary="Mark selected students as boarded",
+    description="Marks a list of students assigned to a trip's route as boarded."
 )
-async def mark_all_students_boarded_endpoint(
+async def mark_students_boarded_endpoint(
     trip_id: int,
+    boarding_data: MarkStudentsBoardedRequest,
     db: AsyncSession = Depends(get_db),
     current_user = Depends(get_current_driver)
 ):
@@ -416,22 +552,29 @@ async def mark_all_students_boarded_endpoint(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=e.message
         )
-    
+
     if trip.driver_id != current_user.id:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="You don't have access to this trip"
         )
-    
-    await mark_all_students_boarded(db, trip_id)
-    
-    students = await get_students_by_bus_route(db, trip.route_id)
-    for student in students:
-        await notify_guardians_student_boarding(
-            db,
-            student_id=student.id,
-            bus_number=trip.bus.bus_number,
-            time=datetime.now().strftime("%H:%M")
-        )
-    
-    return {"message": "All students marked as boarded"}
+
+    await mark_students_boarded(db, trip_id, boarding_data.student_ids)
+
+    # Notify guardians only for the students who were marked as boarded
+    for student_id in boarding_data.student_ids:
+        # This will silently fail if a student isn't found, which is acceptable here
+        try:
+            student = await get_student_by_id(db, student_id)
+            if student:
+                 await notify_guardians_student_boarding(
+                    db,
+                    student_id=student.id,
+                    bus_number=trip.bus.bus_number,
+                    time=datetime.now().strftime("%H:%M")
+                )
+        except NotFoundException:
+            continue
+
+    return {"message": "Selected students have been marked as boarded."}
+

@@ -272,3 +272,26 @@ async def delete_guardian_student(db: AsyncSession, relationship_id: int) -> boo
     if result.rowcount == 0:
         raise NotFoundException("GuardianStudentRelationship", relationship_id)
     return True
+
+async def get_students_by_guardian_id(db: AsyncSession, guardian_id: int) -> List[Student]:
+    """
+    Retrieves all students for a specific guardian, eagerly loading all necessary
+    relationships (bus route, bus stop, and guardians) to prevent async errors.
+    """
+    result = await db.execute(
+        select(Student)
+        .join(GuardianStudent)
+        .where(GuardianStudent.guardian_id == guardian_id)
+        .options(
+            # ✅ THE FIX: Eagerly load the guardians relationship and its nested user data.
+            selectinload(Student.guardians)
+            .selectinload(GuardianStudent.guardian)
+            .selectinload(Guardian.user),
+            
+            # Also keep the existing eager loads for bus route and stop
+            selectinload(Student.bus_route).selectinload(BusRoute.bus),
+            selectinload(Student.bus_stop)
+        )
+    )
+    # Use .unique() to avoid duplicate students if they have multiple guardians
+    return result.scalars().unique().all()
