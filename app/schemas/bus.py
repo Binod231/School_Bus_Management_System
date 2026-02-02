@@ -115,6 +115,16 @@ class BusRouteStopCreate(BusRouteStopBase):
     stop_id: int
 
 
+class BusRouteStopMinimal(BaseModel):
+    stop_id: int
+    sequence: Optional[int] = None
+
+class BusRouteStopsBulkUpdate(BaseModel):
+    stop_ids: Optional[List[int]] = None
+    bus_stop_ids: Optional[List[int]] = None
+    stops: Optional[List[BusRouteStopMinimal]] = None
+
+
 class BusRouteStopResponse(BusRouteStopBase):
     id: int
     route_id: int
@@ -161,6 +171,18 @@ class LocationState(BaseModel):
     speed: Optional[float] = None
     heading: Optional[float] = None
 
+class StudentRosterEntry(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    
+    student_id: int
+    first_name: str
+    last_name: str
+    status: str
+    boarded_at: Optional[datetime] = None
+    guardian_name: Optional[str] = None
+    guardian_phone: Optional[str] = None
+
+
 class ActiveBusLocation(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -174,4 +196,6 @@ class ActiveBusLocation(BaseModel):
     trip_id: str
     total_students: int
     boarded_students: int
+    dropped_off_students: int
     arrived_students: int
+    student_roster: List[StudentRosterEntry] = []

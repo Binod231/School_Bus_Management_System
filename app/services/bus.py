@@ -267,3 +267,38 @@ async def add_stop_to_route(db: AsyncSession, route_stop_data: dict) -> BusRoute
     await db.refresh(db_route_stop)
     return db_route_stop
 
+
+async def delete_route_stop(db: AsyncSession, route_id: int, stop_id: int) -> bool:
+    """Remove a specific stop from a route"""
+    result = await db.execute(
+        delete(BusRouteStop).where(
+            BusRouteStop.route_id == route_id,
+            BusRouteStop.stop_id == stop_id
+        )
+    )
+    await db.commit()
+    return result.rowcount > 0
+
+
+async def update_route_stops_bulk(db: AsyncSession, route_id: int, stop_ids: List[int]) -> List[BusRouteStop]:
+    """Replace all stops for a route with a new list in order"""
+    # 1. Remove all existing stops for this route
+    await db.execute(delete(BusRouteStop).where(BusRouteStop.route_id == route_id))
+    
+    # 2. Add new stops in the specified sequence
+    new_stops = []
+    base_time = datetime.now() # Minimal placeholder for required time field
+    
+    for idx, stop_id in enumerate(stop_ids):
+        new_stop = BusRouteStop(
+            route_id=route_id,
+            stop_id=stop_id,
+            sequence=idx + 1,
+            estimated_arrival_time=base_time # You might want to pass real times later
+        )
+        db.add(new_stop)
+        new_stops.append(new_stop)
+    
+    await db.commit()
+    return new_stops
+

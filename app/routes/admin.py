@@ -5,17 +5,26 @@ from app.db.session import get_db
 from app.core.jwt import get_current_admin, verify_school_resource_access, get_current_active_user
 from app.schemas.user import UserCreate, UserResponse, UserUpdate
 from app.schemas.student import StudentCreate, StudentResponse, StudentUpdate, GuardianUpdate, GuardianCreate, GuardianResponse, GuardianWithStudentsResponse
-from app.schemas.bus import BusCreate, BusResponse, BusRouteCreate, BusRouteResponse, BusUpdate, BusRouteUpdate, BusDriverCreate
+from app.schemas.bus import (
+    BusCreate, BusResponse, BusRouteCreate, BusRouteResponse, 
+    BusUpdate, BusRouteUpdate, BusDriverCreate, BusRouteStopCreate, 
+    BusRouteStopResponse, BusRouteStopsBulkUpdate
+)
 from app.core.exceptions import NotFoundException, InvalidDataException
 from app.services.user import create_user, get_users, get_user_by_id, get_user_by_email, update_user, delete_user
 from app.services.student import create_student, get_students, get_student_by_id, update_student, delete_student, get_guardian_by_user_id, update_guardian, delete_guardian_by_user_id
-from app.services.bus import create_bus, get_buses, create_bus_route, get_bus_routes, assign_driver_to_bus, get_bus_by_id, update_bus, delete_bus, get_bus_route_by_id, update_bus_route, delete_bus_route
+from app.services.bus import (
+    create_bus, get_buses, create_bus_route, get_bus_routes, assign_driver_to_bus, 
+    get_bus_by_id, update_bus, delete_bus, get_bus_route_by_id, 
+    update_bus_route, delete_bus_route, add_stop_to_route, get_bus_route_stops,
+    update_route_stops_bulk, delete_route_stop
+)
 from app.utils.email import send_new_user_email
 from app.models.user import UserRole, User
 from app.models.incident import Incident
 from app.models.student import Student
 from app.models.bus import Bus
-from app.models.trip import Trip, TripStudent, StudentStatus
+from app.models.trip import Trip, TripStudent, StudentStatus, TripDirection
 from sqlalchemy import func, select
 from app.services.student import create_guardian_student, GuardianStudent, create_guardian, get_guardians, get_guardian_by_user_id, delete_guardian_by_user_id,  update_student as update_student_service,delete_student as delete_student_service, get_student_by_id, get_guardian_by_id
 from app.schemas.bus import BusStopCreate, BusStopUpdate, BusStopResponse, BusRouteResponse
@@ -588,7 +597,7 @@ async def get_dashboard_stats(
     
     active_trips_count = await db.scalar(
         select(func.count(Trip.id)).where(
-            Trip.status == "in_progress"
+            Trip.status == "IN_PROGRESS"
         )
     )
     
@@ -886,6 +895,108 @@ async def delete_bus_route_endpoint(
     await delete_bus_route(db, route_id)
     return {"detail": "Bus route deleted"}
 
+
+@router.post(
+    "/bus-routes/{route_id}/stops",
+    response_model=BusRouteStopResponse,
+    summary="Add a bus stop to a route"
+)
+async def add_stop_to_bus_route(
+    route_id: int,
+    stop_data: BusRouteStopCreate,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_admin)
+):
+    try:
+        route = await get_bus_route_by_id(db, route_id)
+        if route.school_id != current_user.school_id:
+            raise HTTPException(status_code=403, detail="Unauthorized")
+        
+        stop_data_dict = stop_data.model_dump()
+        stop_data_dict["route_id"] = route_id
+        return await add_stop_to_route(db, stop_data_dict)
+    except NotFoundException as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
+
+@router.get(
+    "/bus-routes/{route_id}/stops",
+    response_model=List[BusRouteStopResponse],
+    summary="List all stops for a bus route"
+)
+async def list_route_stops(
+    route_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_admin)
+):
+    try:
+        route = await get_bus_route_by_id(db, route_id)
+        if route.school_id != current_user.school_id:
+            raise HTTPException(status_code=403, detail="Unauthorized")
+        return await get_bus_route_stops(db, route_id)
+    except NotFoundException as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
+
+@router.put(
+    "/bus-routes/{route_id}/stops",
+    response_model=List[BusRouteStopResponse],
+    summary="Replace all stops for a bus route"
+)
+async def set_route_stops(
+    route_id: int,
+    stops_data: BusRouteStopsBulkUpdate,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_admin)
+):
+    try:
+        route = await get_bus_route_by_id(db, route_id)
+        if route.school_id != current_user.school_id:
+            raise HTTPException(status_code=403, detail="Unauthorized")
+        
+        # Extract stop IDs from flexible schema formats
+        stop_ids = []
+        if stops_data.stop_ids is not None:
+            stop_ids = stops_data.stop_ids
+        elif stops_data.bus_stop_ids is not None:
+            stop_ids = stops_data.bus_stop_ids
+        elif stops_data.stops is not None:
+            stop_ids = [s.stop_id for s in stops_data.stops]
+        else:
+            raise HTTPException(status_code=422, detail="No stop IDs found. Use stop_ids, bus_stop_ids, or stops array.")
+
+        return await update_route_stops_bulk(db, route_id, [int(sid) for sid in stop_ids])
+    except NotFoundException as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
+
+@router.delete(
+    "/bus-routes/{route_id}/stops/{stop_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    summary="Remove a stop from a route"
+)
+async def remove_stop_from_route(
+    route_id: int,
+    stop_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_admin)
+):
+    try:
+        route = await get_bus_route_by_id(db, route_id)
+        if route.school_id != current_user.school_id:
+            raise HTTPException(status_code=403, detail="Unauthorized")
+        
+        success = await delete_route_stop(db, route_id, stop_id)
+        if not success:
+            raise HTTPException(status_code=404, detail="Stop not found on this route")
+            
+        return Response(status_code=status.HTTP_204_NO_CONTENT)
+    except NotFoundException as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        print(f"DEBUG ADMIN: ERROR {e}")
+        raise e
+
 # --- BUS STOP MANAGEMENT ---
 
 @router.post(
@@ -910,8 +1021,9 @@ async def list_bus_stops(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_admin)
 ):
-    # This assumes stops are indirectly linked to schools via routes.
-    return await get_bus_stops_service(db, school_id=current_user.school_id)
+    # Return all bus stops (including those not yet linked to routes)
+    # Bus stops can be created independently and linked to routes later
+    return await get_bus_stops_service(db, school_id=None)
 
 
 @router.put(
@@ -1233,11 +1345,50 @@ async def get_all_bus_locations(
         
         
         # Calculate the different student counts
+        # Total Students: Count of all students assigned to this trip
         total_students = len(trip.students)
+
+        # Boarded: Count of students who have a boarded_at time (implies they were picked up)
         boarded_students = sum(1 for ts in trip.students if ts.boarded_at is not None)
-        arrived_students = sum(1 for ts in trip.students if ts.status == "at_home" and ts.boarded_at is not None)
         
-      
+        # Arrived: Count of students who have reached their destination
+        # For TO_SCHOOL trips, this means they are AT_SCHOOL
+        # For FROM_SCHOOL trips, this means they are AT_HOME (and boarded_at is set)
+        if trip.direction == TripDirection.TO_SCHOOL:
+             arrived_students = sum(1 for ts in trip.students if ts.status == StudentStatus.AT_SCHOOL)
+        else:
+             # Default to FROM_SCHOOL behavior
+             arrived_students = sum(1 for ts in trip.students if ts.status == StudentStatus.AT_HOME and ts.boarded_at is not None)
+        
+        # Dropped Off: Count of students currently waiting for confirmation
+        dropped_off_students = sum(1 for ts in trip.students if ts.status == StudentStatus.DROPPED_OFF)
+
+        # Build Detailed Roster
+        roster = []
+        for ts in trip.students:
+            guardian_name = "N/A"
+            guardian_phone = "N/A"
+            
+            # Find a guardian (Prioritize primary, else take first)
+            if ts.student and ts.student.guardians:
+                # guard_rel is GuardianStudent object
+                primary_guard = next((g for g in ts.student.guardians if g.is_primary), None)
+                target_guard_rel = primary_guard if primary_guard else ts.student.guardians[0]
+                
+                if target_guard_rel.guardian and target_guard_rel.guardian.user:
+                    user = target_guard_rel.guardian.user
+                    guardian_name = f"{user.first_name} {user.last_name}"
+                    guardian_phone = user.phone
+
+            roster.append({
+                "student_id": ts.student_id,
+                "first_name": ts.student.first_name,
+                "last_name": ts.student.last_name,
+                "status": ts.status,
+                "boarded_at": ts.boarded_at,
+                "guardian_name": guardian_name,
+                "guardian_phone": guardian_phone
+            })
 
         response_data.append({
             "id": str(trip.bus.id),
@@ -1252,9 +1403,10 @@ async def get_all_bus_locations(
             #  'students_count' with the new detailed fields
             "total_students": total_students,
             "boarded_students": boarded_students,
-            "arrived_students": arrived_students
+            "dropped_off_students": dropped_off_students,
+            "arrived_students": arrived_students,
             
-            
+            "student_roster": roster
         })
         
     return response_data

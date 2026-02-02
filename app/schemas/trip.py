@@ -8,22 +8,23 @@ from app.schemas.bus import BusResponse, BusRouteResponse
 
 
 class TripStatusEnum(str, Enum):
-    scheduled = "scheduled"
-    in_progress = "in_progress"
-    completed = "completed"
-    cancelled = "cancelled"
+    scheduled = "SCHEDULED"
+    in_progress = "IN_PROGRESS"
+    completed = "COMPLETED"
+    cancelled = "CANCELLED"
 
 
 class TripTypeEnum(str, Enum):
-    morning = "morning"
-    afternoon = "afternoon"
-    special = "special"
+    morning = "MORNING"
+    afternoon = "AFTERNOON"
+    special = "SPECIAL"
 
 
 class StudentStatusEnum(str, Enum):
-    at_home = "at_home"
-    on_bus = "on_bus"
-    at_school = "at_school"
+    at_home = "AT_HOME"
+    on_bus = "ON_BUS"
+    dropped_off = "DROPPED_OFF"
+    at_school = "AT_SCHOOL"
 
 
 class TripBase(BaseModel):

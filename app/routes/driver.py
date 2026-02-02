@@ -10,7 +10,7 @@ from app.schemas.user import UserResponse, UserRole
 from app.schemas.trip import TripCreate, TripResponse, TripUpdate, TripStudentUpdate, LocationUpdateCreate, LocationUpdateResponse, TripStudentResponse, MarkStudentsBoardedRequest
 from app.schemas.student import StudentResponse
 from app.schemas.bus import BusResponse, BusRouteResponse
-from app.services.trip import create_trip, get_driver_trips, get_trip_by_id, update_trip, get_trip_students, update_trip_student, create_location_update, get_all_active_trips_for_driver, mark_students_boarded
+from app.services.trip import create_trip, get_driver_trips, get_trip_by_id, update_trip, get_trip_students, update_trip_student, create_location_update, get_all_active_trips_for_driver, mark_students_boarded, get_trip_student
 from app.services.student import get_students_by_bus_route, get_student_by_id, get_student_guardians
 from app.services.notification import notify_guardians_student_boarding
 from app.utils.qrcode import verify_student_qr_code
@@ -291,6 +291,24 @@ async def update_student_status(
             detail="Student not assigned to this route's trip"
         )
 
+    # Check if guardian has already confirmed arrival
+    # Fetch the current TripStudent record to check status
+    try:
+        current_trip_student = await get_trip_student(db, trip_id, student_id)
+        
+        # If this is a FROM_SCHOOL trip and the student is already AT_HOME with disembarked_at set,
+        # it means the guardian has confirmed arrival and driver cannot modify
+        if (trip.direction == TripDirection.FROM_SCHOOL and 
+            current_trip_student.status == StudentStatus.AT_HOME and 
+            current_trip_student.disembarked_at is not None):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Cannot modify student status - Guardian has already confirmed arrival"
+            )
+    except NotFoundException:
+        # If no record exists yet, it's fine to create one
+        pass
+
     updated_student = await update_trip_student(db, trip_id, student_id, student_data.dict(exclude_unset=True))
 
     if student_data.status == StudentStatus.ON_BUS and student_data.boarded_at:
@@ -526,7 +544,7 @@ async def verify_student_qr(
         db,
         trip_id=active_trip.id,
         student_id=student.id,
-        status="on_bus"
+        status=StudentStatus.ON_BUS
     )
 
     if not updated_trip_student:

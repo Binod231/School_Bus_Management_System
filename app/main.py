@@ -111,3 +111,4 @@ async def websocket_endpoint(
     finally:
         # CRITICAL: Always close the database session
         await db.close()
+ 

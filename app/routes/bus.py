@@ -1,16 +1,17 @@
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
-from typing import List
+from typing import List, Optional
 from app.db.session import get_db
 from app.core.jwt import get_current_active_user
 from app.schemas.bus import BusResponse, BusRouteResponse, BusStopResponse
 from app.services.bus import get_buses, get_bus_routes, get_bus_stops
 from app.services.trip import get_active_trips_with_locations, get_latest_location_update_for_trips
 from app.models import Bus, Trip, BusRoute, BusStop, BusRouteStop, User # Import User model
+from app.models.trip import StudentStatus
 from sqlalchemy import func, select
 from datetime import datetime, date
 
-router = APIRouter(prefix="/admin", tags=["Admin Dashboard"])
+router = APIRouter(prefix="/bus_ops", tags=["Bus Operations"])
 
 # --- Security Dependency for ADMIN ONLY ---
 async def get_current_admin_user(current_user: User = Depends(get_current_active_user)):
@@ -37,55 +38,10 @@ admin_only = [Depends(get_current_admin_user)]
 admin_or_guardian = [Depends(get_admin_or_guardian_user)]
 
 
-@router.get(
-    "/buses", 
-    response_model=List[BusResponse],
-    summary="[Admin] List all buses for a school",
-    dependencies=admin_only
-)
-async def list_buses(
-    school_id: int,
-    skip: int = 0,
-    limit: int = 100,
-    db: AsyncSession = Depends(get_db)
-):
-    """List all buses for a school (Admin endpoint)"""
-    buses = await get_buses(db, school_id=school_id, skip=skip, limit=limit)
-    return buses
+# --- BUS OPERATIONS ROUTES ---
 
-
-@router.get(
-    "/bus-routes", 
-    response_model=List[BusRouteResponse],
-    summary="[Admin] List all bus routes for a school",
-    dependencies=admin_only
-)
-async def list_bus_routes(
-    school_id: int,
-    skip: int = 0,
-    limit: int = 100,
-    db: AsyncSession = Depends(get_db)
-):
-    """List all bus routes for a school (Admin endpoint)"""
-    routes = await get_bus_routes(db, school_id=school_id, skip=skip, limit=limit)
-    return routes
-
-
-@router.get(
-    "/bus-stops", 
-    response_model=List[BusStopResponse],
-    summary="[Admin] List all bus stops for a school",
-    dependencies=admin_only
-)
-async def list_bus_stops(
-    school_id: int,
-    skip: int = 0,
-    limit: int = 100,
-    db: AsyncSession = Depends(get_db)
-):
-    """List all bus stops for a school (Admin endpoint)"""
-    stops = await get_bus_stops(db, school_id=school_id, skip=skip, limit=limit)
-    return stops
+# These routes are now primarily handled in admin.py.
+# We keep only unique or multi-role routes here.
 
 # --- MODIFIED ROUTE: Now accessible by Admins and Guardians ---
 @router.get(
@@ -123,7 +79,7 @@ async def get_live_bus_locations(
                 "speed": float(latest_location.speed) if latest_location and latest_location.speed else 0,
                 "heading": float(latest_location.heading) if latest_location and latest_location.heading else 0
             } if latest_location else None,
-            "students_count": len([ts for ts in trip.students if ts.status == "on_bus"])
+            "students_count": len([ts for ts in trip.students if ts.status == StudentStatus.ON_BUS])
         })
     
     return result
@@ -148,7 +104,7 @@ async def get_bus_status_overview(
     
     active_trips_query = select(func.count(Trip.id)).join(BusRoute).where(
         BusRoute.school_id == school_id,
-        Trip.status == "in_progress"
+        Trip.status == "IN_PROGRESS"
     )
     active_trips = await db.scalar(active_trips_query)
 
@@ -169,7 +125,7 @@ async def get_bus_status_overview(
             Trip.route.has(BusRoute.school_id == school_id),
             Trip.actual_end >= today_start,
             Trip.actual_end <= today_end,
-            Trip.status == "completed"
+            Trip.status == "COMPLETED"
         )
     )
     

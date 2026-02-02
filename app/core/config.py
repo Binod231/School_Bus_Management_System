@@ -36,8 +36,8 @@ class Settings(BaseSettings):
     FCM_CREDENTIALS_PATH: str = os.getenv("FCM_CREDENTIALS_PATH", "")
     
     # CORS
-    BACKEND_CORS_ORIGINS: list = ["http://localhost:3000", "http://localhost:8000"]
-    
+    BACKEND_CORS_ORIGINS: list = ["http://localhost:3000", "http://localhost:8000", "http://localhost:3001"]
+     
     class Config:
         case_sensitive = True
         env_file = ".env"

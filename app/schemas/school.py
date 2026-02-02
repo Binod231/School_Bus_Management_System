@@ -13,6 +13,8 @@ class SchoolBase(BaseModel):
     email: str
     website: Optional[str] = None
     logo_url: Optional[str] = None
+    latitude: Optional[float] = None
+    longitude: Optional[float] = None
 
 
 class SchoolCreate(SchoolBase):
@@ -29,6 +31,8 @@ class SchoolUpdate(BaseModel):
     email: Optional[str] = None
     website: Optional[str] = None
     logo_url: Optional[str] = None
+    latitude: Optional[float] = None
+    longitude: Optional[float] = None
     is_active: Optional[bool] = None
 
 

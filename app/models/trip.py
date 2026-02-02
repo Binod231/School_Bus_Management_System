@@ -7,25 +7,26 @@ from app.db.base import Base
 
 
 class TripStatus(str, enum.Enum):
-    SCHEDULED = "scheduled"
-    IN_PROGRESS = "in_progress"
-    COMPLETED = "completed"
-    CANCELLED = "cancelled"
+    SCHEDULED = "SCHEDULED"
+    IN_PROGRESS = "IN_PROGRESS"
+    COMPLETED = "COMPLETED"
+    CANCELLED = "CANCELLED"
 
 
 class TripType(str, enum.Enum):
-    MORNING = "morning"
-    AFTERNOON = "afternoon"
-    EVENING = "evening"
-    SPECIAL = "special"
+    MORNING = "MORNING"
+    AFTERNOON = "AFTERNOON"
+    EVENING = "EVENING"
+    SPECIAL = "SPECIAL"
 
 class TripDirection(str, enum.Enum):
-    TO_SCHOOL = "to_school"
-    FROM_SCHOOL = "from_school"
+    TO_SCHOOL = "TO_SCHOOL"
+    FROM_SCHOOL = "FROM_SCHOOL"
 class StudentStatus(str, enum.Enum):
-    AT_HOME = "at_home"
-    ON_BUS = "on_bus"
-    AT_SCHOOL = "at_school"
+    AT_HOME = "AT_HOME"
+    ON_BUS = "ON_BUS"
+    DROPPED_OFF = "DROPPED_OFF"
+    AT_SCHOOL = "AT_SCHOOL"
 
 
 class Trip(Base):

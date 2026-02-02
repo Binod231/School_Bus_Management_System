@@ -7,6 +7,9 @@ from app.schemas.bus import BusRouteResponse
 class StudentBase(BaseModel):
     first_name: str
     last_name: str
+    address: Optional[str] = None
+    latitude: Optional[float] = None
+    longitude: Optional[float] = None
     date_of_birth: date
     grade: str
     student_id: str
@@ -28,6 +31,9 @@ class StudentCreate(StudentBase):
 class StudentUpdate(BaseModel):
     first_name: Optional[str] = None
     last_name: Optional[str] = None
+    address: Optional[str] = None
+    latitude: Optional[float] = None
+    longitude: Optional[float] = None
     date_of_birth: Optional[date] = None
     grade: Optional[str] = None
     student_id: Optional[str] = None

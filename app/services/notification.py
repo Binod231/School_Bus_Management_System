@@ -230,7 +230,7 @@ async def notify_trip_status_change(
     """Notify relevant users about trip status changes"""
     from app.services.student import get_students_by_bus_route
     
-    if new_status == "in_progress":
+    if new_status == "IN_PROGRESS":
         # Notify guardians that the trip has started
         students = await get_students_by_bus_route(db, trip.route_id)
         for student in students:
@@ -245,7 +245,7 @@ async def notify_trip_status_change(
                     f"Bus {trip.bus.bus_number} has started the {trip.type} trip on route {trip.route.name}"
                 )
     
-    elif new_status == "completed":
+    elif new_status == "COMPLETED":
         # Notify guardians that the trip has completed
         students = await get_students_by_bus_route(db, trip.route_id)
         for student in students:
@@ -259,3 +259,38 @@ async def notify_trip_status_change(
                     "Trip Completed",
                     f"Bus {trip.bus.bus_number} has completed the {trip.type} trip on route {trip.route.name}"
                 )
+
+
+async def notify_dropoff_pending_confirmation(
+    db: AsyncSession,
+    student,
+    trip
+):
+    """Notify guardians and admins about student drop-off pending confirmation"""
+    from app.services.student import get_student_guardians
+    from app.services.user import get_users
+
+    # 1. Notify Guardians
+    guardians = await get_student_guardians(db, student.id)
+    guardian_emails = [guardian.user.email for guardian in guardians if guardian.user.email]
+    guardian_tokens = [guardian.fcm_token for guardian in guardians if guardian.fcm_token]
+
+    for email in guardian_emails:
+        await send_notification_email(
+            email,
+            f"{student.first_name} {student.last_name}",
+            "Dropped Off - waiting for confirmation",
+            f"Your child has been dropped off from bus {trip.bus.bus_number}. Please login to the app to CONFIRM their safe arrival."
+        )
+    
+    # 2. Notify Admins
+    admins = await get_users(db, school_id=student.school_id, role="admin")
+    admin_emails = [admin.email for admin in admins if admin.email]
+
+    for email in admin_emails:
+        await send_notification_email(
+            email,
+            f"{student.first_name} {student.last_name}",
+            "Student Pending Confirmation",
+            f"Student {student.first_name} {student.last_name} was dropped off from trip {trip.id}. Waiting for guardian confirmation."
+        )

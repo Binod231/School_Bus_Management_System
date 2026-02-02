@@ -260,7 +260,9 @@ async def update_trip(db: AsyncSession, trip_id: int, trip_data: dict) -> Trip:
         
         # Only auto-update status for trips TO school.
         # For trips FROM school, status remains ON_BUS until guardian confirms.
-        if trip_to_update.type in [TripType.MORNING, TripType.AFTERNOON] and trip_to_update.type not in [TripType.EVENING, TripType.SPECIAL]:
+        # Auto-update status based on trip direction
+        # Trip TO SCHOOL -> AT_SCHOOL
+        if trip_to_update.direction == TripDirection.TO_SCHOOL:
             await db.execute(
                 update(TripStudent)
                 .where(
@@ -269,7 +271,39 @@ async def update_trip(db: AsyncSession, trip_id: int, trip_data: dict) -> Trip:
                 )
                 .values(status=StudentStatus.AT_SCHOOL, disembarked_at=datetime.now())
             )
-            await db.commit()
+        
+        # Trip FROM SCHOOL -> DROPPED_OFF (Waiting for Guardian Confirmation)
+        elif trip_to_update.direction == TripDirection.FROM_SCHOOL:
+            # 1. Fetch relevant students first (so we know who to notify)
+            stmt = select(TripStudent).where(
+                and_(
+                    TripStudent.trip_id == trip_id,
+                    TripStudent.status == StudentStatus.ON_BUS
+                )
+            ).options(selectinload(TripStudent.student))
+            
+            result = await db.execute(stmt)
+            students_on_bus = result.scalars().all()
+            
+            if students_on_bus:
+                # 2. Update them to DROPPED_OFF
+                await db.execute(
+                    update(TripStudent)
+                    .where(
+                        and_(
+                            TripStudent.trip_id == trip_id,
+                            TripStudent.status == StudentStatus.ON_BUS
+                        )
+                    )
+                    .values(status=StudentStatus.DROPPED_OFF, disembarked_at=datetime.now())
+                )
+                
+                # 3. Trigger Notifications
+                from app.services.notification import notify_dropoff_pending_confirmation
+                for ts in students_on_bus:
+                    await notify_dropoff_pending_confirmation(db, ts.student, trip_to_update)
+            
+        await db.commit()
     
     # Re-fetch the updated trip with all relationships eagerly loaded
     result = await db.execute(
@@ -381,14 +415,14 @@ async def mark_students_boarded(db: AsyncSession, trip_id: int, student_ids: Lis
             trip_student = await get_trip_student(db, trip_id, student_id)
             await update_trip_student(
                 db, trip_id, student_id,
-                {"status": "on_bus", "boarded_at": datetime.now()}
+                {"status": StudentStatus.ON_BUS, "boarded_at": datetime.now()}
             )
         except NotFoundException:
             # If no entry exists, create one
             db_trip_student = TripStudent(
                 trip_id=trip_id,
                 student_id=student_id,
-                status="on_bus",
+                status=StudentStatus.ON_BUS,
                 boarded_at=datetime.now()
             )
             db.add(db_trip_student)
@@ -451,7 +485,7 @@ async def get_all_active_trips_for_driver(db: AsyncSession, driver_id: int) -> L
     )
     return result.scalars().unique().all()
 
-async def update_student_status_on_trip(db: AsyncSession, trip_id: int, student_id: int, status: str) -> TripStudent:
+async def update_student_status_on_trip(db: AsyncSession, trip_id: int, student_id: int, status: StudentStatus) -> TripStudent:
     """Update the status of a single student on a specific trip."""
     stmt = (
         update(TripStudent)
@@ -461,7 +495,7 @@ async def update_student_status_on_trip(db: AsyncSession, trip_id: int, student_
                 TripStudent.student_id == student_id
             )
         )
-        .values(status=status, boarded_at=datetime.utcnow() if status == "on_bus" else None)
+        .values(status=status, boarded_at=datetime.utcnow() if status == StudentStatus.ON_BUS else None)
         .returning(TripStudent)
     )
     result = await db.execute(stmt)
@@ -597,7 +631,11 @@ async def get_active_trips_with_locations(db: AsyncSession, school_id: Optional[
         selectinload(Trip.bus),
         selectinload(Trip.driver), # This directly loads the driver (User) from the Trip
         selectinload(Trip.route),
-        selectinload(Trip.students),
+        selectinload(Trip.students)
+        .selectinload(TripStudent.student)
+        .selectinload(Student.guardians)
+        .selectinload(GuardianStudent.guardian)
+        .selectinload(Guardian.user),
         selectinload(Trip.location_updates) # Load all location updates
     ).order_by(Trip.scheduled_start.desc())
 

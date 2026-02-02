@@ -1,5 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 from typing import List
 from app.db.session import get_db
 from app.core.jwt import get_current_guardian
@@ -12,6 +13,7 @@ from app.services.student import update_guardian, get_students_by_guardian_id
 from app.core.exceptions import NotFoundException
 from app.services.notification import notify_admin_arrival_confirmation
 from app.services.incident import get_guardian_incidents_filtered
+from app.models.trip import StudentStatus
 from datetime import datetime
 
 router = APIRouter(
@@ -114,23 +116,26 @@ async def get_student_trips_history(
                  break
 
         if trip_student_info:
-            # Case 1: Trip is completed
-            if trip.status == 'completed':
+            # Priority 1: Check if student is dropped off (Waiting for confirmation)
+            # This must take precedence over 'completed' status
+            if trip_student_info.status == StudentStatus.DROPPED_OFF:
+                trip.student_trip_status = "Waiting for Confirmation"
+            
+            # Priority 2: Trip Status
+            elif trip.status == 'COMPLETED':
                 if trip_student_info.boarded_at:
                     trip.student_trip_status = "Completed"
                 else:
-                    trip.student_trip_status = "Missed"  # Student never boarded
+                    trip.student_trip_status = "Missed"
             
-            # Case 2: Trip is in progress
-            elif trip.status == 'in_progress':
-                if trip_student_info.status == 'at_home':
-                    trip.student_trip_status = "Arrived"  # Guardian confirmed arrival
-                elif trip_student_info.status == 'on_bus':
+            elif trip.status == 'IN_PROGRESS':
+                if trip_student_info.status == StudentStatus.AT_HOME:
+                    trip.student_trip_status = "Arrived"
+                elif trip_student_info.status == StudentStatus.ON_BUS:
                     trip.student_trip_status = "In Progress"
                 else:
                     trip.student_trip_status = "Waiting for Pickup"
             
-            # Fallback for other statuses like 'pending' or 'cancelled'
             else:
                 trip.student_trip_status = trip.status.replace('_', ' ').title()
 
@@ -225,12 +230,39 @@ async def confirm_student_arrival(
             detail="You don't have access to this student"
         )
 
-    try:
-        active_trip = await get_active_student_trip(db, student_id)
-    except NotFoundException:
+
+    # Find the trip where the student is either:
+    # 1. DROPPED_OFF (waiting for confirmation after trip completed), OR
+    # 2. ON_BUS (still on active FROM_SCHOOL trip but arrived home)
+    from app.services.trip import get_trip_by_id, StudentStatus
+    from app.models.trip import TripStudent, Trip, TripDirection
+    from sqlalchemy import select, and_, or_
+
+    stmt = (
+        select(Trip)
+        .join(TripStudent, TripStudent.trip_id == Trip.id)
+        .where(
+            and_(
+                TripStudent.student_id == student_id,
+                or_(
+                    TripStudent.status == StudentStatus.DROPPED_OFF,
+                    and_(
+                        TripStudent.status == StudentStatus.ON_BUS,
+                        Trip.direction == TripDirection.FROM_SCHOOL
+                    )
+                )
+            )
+        )
+        .order_by(Trip.scheduled_start.desc()) # Get the most recent one
+        .limit(1)
+    )
+    result = await db.execute(stmt)
+    active_trip = result.scalar_one_or_none()
+
+    if not active_trip:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="No active trip found for this student"
+            detail="No active FROM_SCHOOL trip found for this student"
         )
 
     # Requirement 1: Check if the trip direction is from school
@@ -250,7 +282,7 @@ async def confirm_student_arrival(
 
     # Requirement 2: Set the student's status to 'at_home'
     update_data = {
-        "status": "at_home" if confirmed else "on_bus",
+        "status": StudentStatus.AT_HOME if confirmed else StudentStatus.ON_BUS,
         "disembarked_at": datetime.now() if confirmed else None
     }
 
@@ -289,10 +321,31 @@ async def get_active_trip_for_student(
     try:
         active_trip = await get_active_student_trip(db, student_id)
     except NotFoundException:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="No active trip found for this student"
+        # Fallback: Check if there is a recently completed trip where the student is waiting for confirmation
+        from app.models.trip import TripStudent, Trip
+        from sqlalchemy import select, and_
+        
+        stmt = (
+            select(Trip)
+            .join(TripStudent, TripStudent.trip_id == Trip.id)
+            .options(selectinload(Trip.students)) # Must load students for the logic below
+            .where(
+                and_(
+                    TripStudent.student_id == student_id,
+                    TripStudent.status == StudentStatus.DROPPED_OFF
+                )
+            )
+            .order_by(Trip.actual_end.desc())
+            .limit(1)
         )
+        result = await db.execute(stmt)
+        active_trip = result.scalar_one_or_none()
+        
+        if not active_trip:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="No active trip found for this student"
+            )
 
     #  THE FIX FOR THE DASHBOARD
     trip_student_info = None
@@ -302,15 +355,22 @@ async def get_active_trip_for_student(
             break
 
     if trip_student_info:
-        if active_trip.status == 'in_progress':
-            if trip_student_info.status == 'at_home':
+        # Apply the same prioritized logic as history
+        if trip_student_info.status == StudentStatus.DROPPED_OFF:
+            active_trip.student_trip_status = "Waiting for Confirmation"
+        elif active_trip.status == 'IN_PROGRESS':
+            if trip_student_info.status == StudentStatus.AT_HOME:
                 active_trip.student_trip_status = "Arrived"
-            elif trip_student_info.status == 'on_bus':
+            elif trip_student_info.status == StudentStatus.ON_BUS:
                 active_trip.student_trip_status = "In Progress"
             else:
                 active_trip.student_trip_status = "Waiting for Pickup"
         else:
-             active_trip.student_trip_status = active_trip.status.replace('_', ' ').title()
+             # For the fallback case (Completed trip), if not dropped_off, it returns here
+             if active_trip.status == 'COMPLETED':
+                 active_trip.student_trip_status = "Completed"
+             else:
+                 active_trip.student_trip_status = active_trip.status.replace('_', ' ').title()
 
 
     return active_trip

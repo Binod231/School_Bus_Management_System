@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, Text, DateTime, ForeignKey, Boolean, Date
+from sqlalchemy import Column, Integer, String, Text, DateTime, ForeignKey, Boolean, Date, Float
 from sqlalchemy.sql import func
 from sqlalchemy.orm import relationship
 from typing import Optional
@@ -12,6 +12,9 @@ class Student(Base):
     id = Column(Integer, primary_key=True, index=True)
     first_name = Column(String, nullable=False)
     last_name = Column(String, nullable=False)
+    address = Column(Text, nullable=True)
+    latitude = Column(Float, nullable=True)
+    longitude = Column(Float, nullable=True)
     date_of_birth = Column(Date, nullable=False)
     grade = Column(String, nullable=False)
     student_id = Column(String, unique=True, nullable=False)
