@@ -13,7 +13,8 @@ from app.services.student import update_guardian, get_students_by_guardian_id
 from app.core.exceptions import NotFoundException
 from app.services.notification import notify_admin_arrival_confirmation
 from app.services.incident import get_guardian_incidents_filtered
-from app.models.trip import StudentStatus
+from app.models.trip import StudentStatus, Trip, TripStudent, TripDirection
+from sqlalchemy import select, and_, or_
 from datetime import datetime
 
 router = APIRouter(
@@ -234,9 +235,6 @@ async def confirm_student_arrival(
     # Find the trip where the student is either:
     # 1. DROPPED_OFF (waiting for confirmation after trip completed), OR
     # 2. ON_BUS (still on active FROM_SCHOOL trip but arrived home)
-    from app.services.trip import get_trip_by_id, StudentStatus
-    from app.models.trip import TripStudent, Trip, TripDirection
-    from sqlalchemy import select, and_, or_
 
     stmt = (
         select(Trip)
@@ -322,8 +320,6 @@ async def get_active_trip_for_student(
         active_trip = await get_active_student_trip(db, student_id)
     except NotFoundException:
         # Fallback: Check if there is a recently completed trip where the student is waiting for confirmation
-        from app.models.trip import TripStudent, Trip
-        from sqlalchemy import select, and_
         
         stmt = (
             select(Trip)

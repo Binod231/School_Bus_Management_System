@@ -12,11 +12,11 @@ from app.schemas.student import StudentResponse
 from app.schemas.bus import BusResponse, BusRouteResponse
 from app.services.trip import create_trip, get_driver_trips, get_trip_by_id, update_trip, get_trip_students, update_trip_student, create_location_update, get_all_active_trips_for_driver, mark_students_boarded, get_trip_student
 from app.services.student import get_students_by_bus_route, get_student_by_id, get_student_guardians
-from app.services.notification import notify_guardians_student_boarding
+from app.services.notification import notify_guardians_student_boarding, notify_dropoff_pending_confirmation, notify_guardians_arrival
 from app.utils.qrcode import verify_student_qr_code
 from app.services.bus import get_bus_by_id, get_bus_route_by_id, get_bus_drivers, get_buses, get_bus_routes
 from app.core.exceptions import NotFoundException, InvalidDataException
-from app.models.trip import StudentStatus, TripStudent
+from app.models.trip import StudentStatus, TripStudent, TripDirection, Trip
 from sqlalchemy import select, func
 from datetime import datetime
 from app.utils.websocket import manager
@@ -158,6 +158,14 @@ async def start_trip(
 
     trip_data_dict = trip_data.dict()
     trip_data_dict["driver_id"] = current_user.id
+
+    # --- NEW: Check if driver already has an active trip ---
+    active_trips = await get_all_active_trips_for_driver(db, driver_id=current_user.id)
+    if active_trips:
+         raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="You already have an active trip. Please complete it before starting a new one."
+        )
 
     trip = await create_trip(db, trip_data=trip_data_dict)
     return trip
@@ -317,6 +325,15 @@ async def update_student_status(
             student_id=student_id,
             bus_number=trip.bus.bus_number,
             time=student_data.boarded_at.strftime("%H:%M")
+        )
+    elif student_data.status == StudentStatus.DROPPED_OFF:
+        await notify_dropoff_pending_confirmation(db, student, trip)
+    elif student_data.status == StudentStatus.AT_SCHOOL:
+        await notify_guardians_arrival(
+            db,
+            student_id=student_id,
+            location="School",
+            time=datetime.now().strftime("%H:%M")
         )
 
     return updated_student
@@ -517,7 +534,7 @@ async def verify_student_qr(
     """
     try:
         # Pass the actual data string from the JSON object
-        student = await verify_student_qr_code(db, qr_data.get("qr_data"), current_user.school_id)
+        student = await verify_student_qr_code(qr_data.get("qr_data"), db)
     except InvalidDataException as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
 
@@ -545,6 +562,14 @@ async def verify_student_qr(
         trip_id=active_trip.id,
         student_id=student.id,
         status=StudentStatus.ON_BUS
+    )
+
+    # Notify guardians when student boards via QR
+    await notify_guardians_student_boarding(
+        db,
+        student_id=student.id,
+        bus_number=active_trip.bus.bus_number,
+        time=datetime.now().strftime("%H:%M")
     )
 
     if not updated_trip_student:

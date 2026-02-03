@@ -4,7 +4,7 @@ from pydantic_settings import BaseSettings
 from functools import lru_cache
 
 class Settings(BaseSettings):
-    PROJECT_NAME: str = "School Bus Management System"
+    PROJECT_NAME: str = "EDURIDE School Bus Management"
     VERSION: str = "1.0.0"
     API_V1_STR: str = "/api/v1"
     
@@ -36,7 +36,7 @@ class Settings(BaseSettings):
     FCM_CREDENTIALS_PATH: str = os.getenv("FCM_CREDENTIALS_PATH", "")
     
     # CORS
-    BACKEND_CORS_ORIGINS: list = ["http://localhost:3000", "http://localhost:8000", "http://localhost:3001"]
+    BACKEND_CORS_ORIGINS: list = ["http://localhost:3000", "http://localhost:8000", "http://localhost:3001", "http://192.168.100.70:3000"]
      
     class Config:
         case_sensitive = True

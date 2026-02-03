@@ -1,17 +1,15 @@
 from fastapi import FastAPI, Depends, Query, status
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.ext.asyncio import AsyncSession
-from typing import List
+from typing import List, Dict
 from app.core.config import settings
 from app.db.session import get_db
-from app.routes import auth, superadmin, admin, driver, guardian, bus, incident
+from app.routes import auth, superadmin, admin, driver, guardian, bus, incident, school
 from app.services.school import get_schools_with_admin_status
 from app.schemas.school import SchoolResponse
 from app.core.cache import redis_client
-from fastapi import WebSocket
 from starlette.websockets import WebSocketState
-from typing import Dict
-from fastapi import WebSocketDisconnect
+from fastapi import WebSocket, WebSocketDisconnect
 from app.utils.websocket import ConnectionManager
 from app.services.trip import authorize_trip_access
 from app.core.jwt import get_current_user_from_token
@@ -38,7 +36,7 @@ async def shutdown_event():
 # Set up CORS
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=settings.BACKEND_CORS_ORIGINS,
+    allow_origins=[str(origin) for origin in settings.BACKEND_CORS_ORIGINS],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -52,19 +50,7 @@ app.include_router(driver.router, prefix=settings.API_V1_STR, tags=["driver"])
 app.include_router(guardian.router, prefix=settings.API_V1_STR, tags=["guardian"])
 app.include_router(bus.router, prefix=settings.API_V1_STR, tags=["bus"])
 app.include_router(incident.router, prefix=settings.API_V1_STR, tags=["incidents"])
-
-
-@app.get(
-    "/",
-    response_model=List[SchoolResponse],
-    summary="Get all schools",
-    description="Retrieves a list of all registered schools."
-)
-async def list_registered_schools(
-    db: AsyncSession = Depends(get_db)
-):
-    schools = await get_schools_with_admin_status(db)
-    return schools
+app.include_router(school.router, prefix=settings.API_V1_STR, tags=["schools"])
 
 
 @app.get("/health")

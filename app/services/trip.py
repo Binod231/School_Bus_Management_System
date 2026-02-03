@@ -2,7 +2,7 @@
 
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, update, delete, and_, func
-from app.models.trip import Trip, TripStudent, LocationUpdate, TripStatus, StudentStatus, TripType
+from app.models.trip import Trip, TripStudent, LocationUpdate, TripStatus, StudentStatus, TripType, TripDirection
 from app.models.bus import Bus, BusRoute
 from app.models.user import User, UserRole
 from app.models.student import Student
