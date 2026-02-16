@@ -1,16 +1,27 @@
 version: '3.8'
 
 services:
+  # 1. Redis Cache (Runs on the server)
+  redis:
+    image: redis:7-alpine
+    container_name: school_bus_redis_prod
+    restart: always
+    ports:
+      - "6379:6379"
+
+  # 2. Your Application (Connects to AWS RDS)
   school_bus_web:
     build: .
     container_name: school_bus_web_prod
     restart: always
     command: >
-      sh -c "alembic upgrade head && 
+      sh -c "cd app/migrations && alembic upgrade head && cd ../.. && 
              uvicorn app.main:app --host 0.0.0.0 --port 8000"
     ports:
       - "80:8000"
     env_file:
       - .env
+    depends_on:
+      - redis
     extra_hosts:
       - "host.docker.internal:host-gateway"
