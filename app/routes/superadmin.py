@@ -7,7 +7,7 @@ from app.db.session import get_db
 from app.core.jwt import get_current_superadmin
 from app.schemas.school import SchoolCreate, SchoolResponse, SchoolUpdate
 from app.schemas.user import UserCreate, UserResponse, UserUpdate
-from app.services.school import create_school, update_school, delete_school, get_schools_with_admin_status, get_school_by_id_with_admin_status
+from app.services.school import create_school, update_school, delete_school, get_schools_with_admin_status, get_school_by_id_with_admin_status, invalidate_school_cache
 from app.services.user import create_user, get_user_by_email, get_users, get_user_by_id, update_user, delete_user
 from app.models.user import UserRole, User
 from app.models.school import School
@@ -167,6 +167,8 @@ async def create_school_admin(
     user_data["school_id"] = school_id
     admin = await create_user(db, user_data=user_data)
     
+    await invalidate_school_cache()  # Invalidate cache so school list updates
+    
     # Return the user response
     return UserResponse.from_orm(admin)
 
@@ -245,6 +247,7 @@ async def update_admin_details(
 ):
     try:
         updated_admin = await update_user(db, admin_id, admin_data.dict(exclude_unset=True))
+        await invalidate_school_cache() # Invalidate cache in case status changed
         return updated_admin
     except NotFoundException as e:
         raise HTTPException(
@@ -264,9 +267,5 @@ async def delete_admin_details(
 ):
     try:
         await delete_user(db, admin_id)
+        await invalidate_school_cache() # Invalidate cache
         return Response(status_code=status.HTTP_204_NO_CONTENT)
-    except NotFoundException as e:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=e.message
-        )
