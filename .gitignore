@@ -9,3 +9,4 @@ test_guardian_incidents.py
 test_guardian_incidents_simple.py
 verify_counts.py
 firebase-admin-key.json
+.env.restored
