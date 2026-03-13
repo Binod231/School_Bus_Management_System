@@ -269,3 +269,8 @@ async def delete_admin_details(
         await delete_user(db, admin_id)
         await invalidate_school_cache() # Invalidate cache
         return Response(status_code=status.HTTP_204_NO_CONTENT)
+    except NotFoundException as e:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=e.message
+        )
