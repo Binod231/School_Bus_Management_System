@@ -61,6 +61,13 @@ class TripUpdate(BaseModel):
     actual_start: Optional[datetime] = None
     actual_end: Optional[datetime] = None
 
+    @field_validator('type', 'direction', 'status', mode='before')
+    @classmethod
+    def uppercase_enums(cls, v):
+        if isinstance(v, str):
+            return v.upper()
+        return v
+
 class TripStudentBase(BaseModel):
     status: StudentStatusEnum = StudentStatusEnum.at_home
 class TripStudentResponse(TripStudentBase):
