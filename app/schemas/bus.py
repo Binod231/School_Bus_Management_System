@@ -1,5 +1,5 @@
 from pydantic import BaseModel, ConfigDict
-from typing import Optional, List
+from typing import Optional, List, Union
 from datetime import datetime
 from app.schemas.user import UserResponse
 
@@ -77,8 +77,8 @@ class BusRouteResponse(BusRouteBase):
 class BusStopBase(BaseModel):
     name: str
     address: str
-    latitude: str
-    longitude: str
+    latitude: Union[str, float]
+    longitude: Union[str, float]
     sequence: int
 
 
