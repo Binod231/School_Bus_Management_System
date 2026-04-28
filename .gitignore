@@ -10,3 +10,26 @@ test_guardian_incidents_simple.py
 verify_counts.py
 firebase-admin-key.json
 .env.restored
+
+# Environments
+.env
+.venv
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+
+# IDEs
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Logs and databases
+*.sqlite3
+*.log

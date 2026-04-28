@@ -1,5 +1,5 @@
-from pydantic import BaseModel, ConfigDict, field_validator
-from typing import Optional, List, Union
+from pydantic import BaseModel, ConfigDict
+from typing import Optional, List
 from datetime import datetime
 from app.schemas.user import UserResponse
 
@@ -80,11 +80,6 @@ class BusStopBase(BaseModel):
     latitude: str
     longitude: str
     sequence: int
-
-    @field_validator('latitude', 'longitude', mode='before')
-    @classmethod
-    def cast_to_string(cls, v):
-        return str(v)
 
 
 class BusStopCreate(BusStopBase):

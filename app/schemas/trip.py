@@ -1,4 +1,4 @@
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel
 from typing import Optional, List
 from datetime import datetime
 from enum import Enum
@@ -17,7 +17,6 @@ class TripStatusEnum(str, Enum):
 class TripTypeEnum(str, Enum):
     morning = "MORNING"
     afternoon = "AFTERNOON"
-    evening = "EVENING"
     special = "SPECIAL"
 
 
@@ -36,13 +35,6 @@ class TripBase(BaseModel):
     scheduled_start: datetime
     scheduled_end: datetime
     
-    @field_validator('type', 'direction', 'status', mode='before')
-    @classmethod
-    def uppercase_enums(cls, v):
-        if isinstance(v, str):
-            return v.upper()
-        return v
-    
 
 
 class TripCreate(TripBase):
@@ -60,13 +52,6 @@ class TripUpdate(BaseModel):
     scheduled_end: Optional[datetime] = None
     actual_start: Optional[datetime] = None
     actual_end: Optional[datetime] = None
-
-    @field_validator('type', 'direction', 'status', mode='before')
-    @classmethod
-    def uppercase_enums(cls, v):
-        if isinstance(v, str):
-            return v.upper()
-        return v
 
 class TripStudentBase(BaseModel):
     status: StudentStatusEnum = StudentStatusEnum.at_home

@@ -107,11 +107,7 @@ async def delete_bus(db: AsyncSession, bus_id: int) -> bool:
 
 async def get_bus_route_by_id(db: AsyncSession, route_id: int) -> BusRoute:
     """Get bus route by ID"""
-    result = await db.execute(
-        select(BusRoute)
-        .options(selectinload(BusRoute.bus))
-        .where(BusRoute.id == route_id)
-    )
+    result = await db.execute(select(BusRoute).where(BusRoute.id == route_id))
     route = result.scalar_one_or_none()
     if not route:
         raise NotFoundException("BusRoute", route_id)
@@ -145,7 +141,8 @@ async def create_bus_route(db: AsyncSession, route_data: dict) -> BusRoute:
     db_route = BusRoute(**route_data)
     db.add(db_route)
     await db.commit()
-    return await get_bus_route_by_id(db, db_route.id)
+    await db.refresh(db_route)
+    return db_route
 
 
 async def update_bus_route(db: AsyncSession, route_id: int, route_data: dict) -> BusRoute:
@@ -154,11 +151,13 @@ async def update_bus_route(db: AsyncSession, route_id: int, route_data: dict) ->
         update(BusRoute)
         .where(BusRoute.id == route_id)
         .values(**route_data)
+        .returning(BusRoute)
     )
     await db.commit()
-    if result.rowcount == 0:
+    updated_route = result.scalar_one_or_none()
+    if not updated_route:
         raise NotFoundException("BusRoute", route_id)
-    return await get_bus_route_by_id(db, route_id)
+    return updated_route
 
 
 async def delete_bus_route(db: AsyncSession, route_id: int) -> bool:
