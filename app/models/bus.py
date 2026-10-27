@@ -56,7 +56,7 @@ class BusRoute(Base):
     bus = relationship("Bus", back_populates="routes")
 
     # Relationships
-    stops = relationship("BusRouteStop", back_populates="route")
+    stops = relationship("BusRouteStop", back_populates="route", lazy="selectin")
     students = relationship("Student", back_populates="bus_route")
     trips = relationship("Trip", back_populates="route")
 
@@ -96,7 +96,7 @@ class BusRouteStop(Base):
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
     route = relationship("BusRoute", back_populates="stops")
-    stop = relationship("BusStop", back_populates="route_stops")
+    stop = relationship("BusStop", back_populates="route_stops", lazy="selectin")
 
 
 class BusDriver(Base):

@@ -23,7 +23,9 @@ async def get_trip_by_id(db: AsyncSession, trip_id: int) -> Trip:
         .where(Trip.id == trip_id)
         .options(
             joinedload(Trip.bus),
-            joinedload(Trip.route),
+            selectinload(Trip.route).options(
+                selectinload(BusRoute.stops).selectinload(BusRouteStop.stop)
+            ),
             selectinload(Trip.students).options(
                 joinedload(TripStudent.student).options(
                     joinedload(Student.bus_route),

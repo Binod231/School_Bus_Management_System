@@ -254,6 +254,7 @@ async def get_bus_route_stops(db: AsyncSession, route_id: int) -> List[BusRouteS
     result = await db.execute(
         select(BusRouteStop)
         .where(BusRouteStop.route_id == route_id)
+        .options(selectinload(BusRouteStop.stop))
         .order_by(BusRouteStop.sequence)
     )
     return result.scalars().all()

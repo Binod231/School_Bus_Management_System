@@ -403,22 +403,29 @@ async def update_trip_location(
 
     # Check if arrived near any stop on this route
     arrived_stop = None
-    if trip.route and hasattr(trip.route, 'stops') and trip.route.stops:
-        for rs in trip.route.stops:
-            if rs.stop:
-                try:
-                    s_lat = float(rs.stop.latitude)
-                    s_lon = float(rs.stop.longitude)
-                    dist = calculate_distance_meters(float(location_update.latitude), float(location_update.longitude), s_lat, s_lon)
-                    if dist <= 120.0:
-                        arrived_stop = {
-                            "stop_id": rs.stop.id,
-                            "stop_name": rs.stop.name,
-                            "distance_meters": round(dist, 1)
-                        }
-                        break
-                except (ValueError, TypeError):
-                    pass
+    route_stops = []
+    if trip.route and 'stops' in trip.route.__dict__ and trip.route.stops:
+        route_stops = trip.route.stops
+    elif trip.route_id:
+        from app.services.bus import get_bus_route_stops
+        route_stops = await get_bus_route_stops(db, trip.route_id)
+
+    for rs in route_stops:
+        stop_obj = rs.stop if 'stop' in rs.__dict__ else getattr(rs, 'stop', None)
+        if stop_obj:
+            try:
+                s_lat = float(stop_obj.latitude)
+                s_lon = float(stop_obj.longitude)
+                dist = calculate_distance_meters(float(location_update.latitude), float(location_update.longitude), s_lat, s_lon)
+                if dist <= 120.0:
+                    arrived_stop = {
+                        "stop_id": stop_obj.id,
+                        "stop_name": stop_obj.name,
+                        "distance_meters": round(dist, 1)
+                    }
+                    break
+            except (ValueError, TypeError):
+                pass
 
     broadcast_data = {
         "type": "location_update",
