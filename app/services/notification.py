@@ -1,9 +1,19 @@
 from sqlalchemy.ext.asyncio import AsyncSession
-from app.utils.fcm import send_push_notification, send_student_boarding_notification, send_bus_location_update, send_incident_notification, send_arrival_notification
+from app.utils.fcm import (
+    send_push_notification,
+    send_student_boarding_notification,
+    send_student_unboarding_notification,
+    send_bus_stop_arrival_notification,
+    send_bus_location_update,
+    send_incident_notification,
+    send_arrival_notification
+)
 from app.utils.email import send_notification_email
 from app.services.student import get_students_by_bus_route, get_student_guardians
 from typing import List, Optional
+from datetime import datetime
 from app.services.trip import get_trip_by_id
+
 
 
 async def notify_guardians_student_boarding(
@@ -280,15 +290,36 @@ async def notify_dropoff_pending_confirmation(
 
     # 1. Notify Guardians
     guardians = await get_student_guardians(db, student.id)
-    guardian_emails = [guardian.user.email for guardian in guardians if guardian.user.email]
+    guardian_emails = [guardian.user.email for guardian in guardians if guardian.user and guardian.user.email]
     guardian_tokens = [guardian.fcm_token for guardian in guardians if guardian.fcm_token]
 
+    bus_number = trip.bus.bus_number if trip.bus else "N/A"
+    stop_name = student.bus_stop.name if getattr(student, "bus_stop", None) else None
+    stop_detail = f" at {stop_name}" if stop_name else ""
+
+    # Send Push Notifications
+    if guardian_tokens:
+        await send_push_notification(
+            guardian_tokens,
+            title="Student Dropped Off",
+            message=f"Your child {student.first_name} {student.last_name} has been dropped off from bus {bus_number}{stop_detail}. Please confirm their safe arrival.",
+            data={
+                "type": "dropoff",
+                "student_id": str(student.id),
+                "student_name": f"{student.first_name} {student.last_name}",
+                "trip_id": str(trip.id),
+                "bus_number": str(bus_number),
+                "stop_name": str(stop_name or "designated stop")
+            }
+        )
+
+    # Send Email Notifications
     for email in guardian_emails:
         await send_notification_email(
             email,
             f"{student.first_name} {student.last_name}",
             "Dropped Off - waiting for confirmation",
-            f"Your child has been dropped off from bus {trip.bus.bus_number}. Please login to the app to CONFIRM their safe arrival.",
+            f"Your child {student.first_name} has been dropped off from bus {bus_number}{stop_detail}. Please login to the app to CONFIRM their safe arrival.",
             redirect_path="/guardian/dashboard"
         )
     
@@ -301,6 +332,92 @@ async def notify_dropoff_pending_confirmation(
             email,
             f"{student.first_name} {student.last_name}",
             "Student Pending Confirmation",
-            f"Student {student.first_name} {student.last_name} was dropped off from trip {trip.id}. Waiting for guardian confirmation.",
+            f"Student {student.first_name} {student.last_name} was dropped off from trip {trip.id}{stop_detail}. Waiting for guardian confirmation.",
             redirect_path="/admin/dashboard"
         )
+
+
+async def notify_guardians_student_unboarding(
+    db: AsyncSession,
+    student_id: int,
+    bus_number: str,
+    location_name: Optional[str] = None,
+    time: Optional[str] = None
+):
+    """Notify guardians when a student unboards/drops off at a stop"""
+    from app.services.student import get_student_guardians, get_student_by_id
+    
+    student = await get_student_by_id(db, student_id)
+    if not student:
+        return
+
+    time_str = time or datetime.now().strftime("%H:%M")
+    stop_name = location_name
+    if not stop_name and getattr(student, "bus_stop", None):
+        stop_name = student.bus_stop.name
+    stop_name = stop_name or "designated stop"
+
+    guardians = await get_student_guardians(db, student_id)
+    guardian_tokens = [g.fcm_token for g in guardians if g.fcm_token]
+    guardian_emails = [g.user.email for g in guardians if g.user and g.user.email]
+
+    # Send push notifications
+    if guardian_tokens:
+        await send_student_unboarding_notification(
+            guardian_tokens,
+            f"{student.first_name} {student.last_name}",
+            bus_number,
+            stop_name,
+            time_str
+        )
+
+    # Send email notifications
+    for email in guardian_emails:
+        await send_notification_email(
+            email,
+            f"{student.first_name} {student.last_name}",
+            "Student Dropped Off at Stop",
+            f"Your child {student.first_name} has unboarded/dropped off from bus {bus_number} at {stop_name} at {time_str}.",
+            redirect_path="/guardian/dashboard"
+        )
+
+
+async def notify_guardians_bus_arrival_at_stop(
+    db: AsyncSession,
+    student_id: int,
+    bus_number: str,
+    stop_name: str,
+    time: Optional[str] = None
+):
+    """Notify guardians when the bus arrives at their student's stop"""
+    from app.services.student import get_student_guardians, get_student_by_id
+    
+    student = await get_student_by_id(db, student_id)
+    if not student:
+        return
+
+    time_str = time or datetime.now().strftime("%H:%M")
+    guardians = await get_student_guardians(db, student_id)
+    guardian_tokens = [g.fcm_token for g in guardians if g.fcm_token]
+    guardian_emails = [g.user.email for g in guardians if g.user and g.user.email]
+
+    # Send push notifications
+    if guardian_tokens:
+        await send_bus_stop_arrival_notification(
+            guardian_tokens,
+            f"{student.first_name} {student.last_name}",
+            bus_number,
+            stop_name,
+            time_str
+        )
+
+    # Send email notifications
+    for email in guardian_emails:
+        await send_notification_email(
+            email,
+            f"{student.first_name} {student.last_name}",
+            "Bus Arrived at Stop",
+            f"Bus {bus_number} has arrived at {stop_name} at {time_str}.",
+            redirect_path="/guardian/dashboard"
+        )
+

@@ -7,14 +7,30 @@ from app.db.session import get_db
 from app.core.jwt import get_current_driver, get_current_active_user
 # CORRECTED: Import UserResponse, not DriverResponse
 from app.schemas.user import UserResponse, UserRole
-from app.schemas.trip import TripCreate, TripResponse, TripUpdate, TripStudentUpdate, LocationUpdateCreate, LocationUpdateResponse, TripStudentResponse, MarkStudentsBoardedRequest
+from app.schemas.trip import (
+    TripCreate, TripResponse, TripUpdate, TripStudentUpdate,
+    LocationUpdateCreate, LocationUpdateResponse, TripStudentResponse,
+    MarkStudentsBoardedRequest, MarkStudentsDroppedOffRequest
+)
 from app.schemas.student import StudentResponse
 from app.schemas.bus import BusResponse, BusRouteResponse
-from app.services.trip import create_trip, get_driver_trips, get_trip_by_id, update_trip, get_trip_students, update_trip_student, create_location_update, get_all_active_trips_for_driver, mark_students_boarded, get_trip_student
+from app.services.trip import (
+    create_trip, get_driver_trips, get_trip_by_id, update_trip,
+    get_trip_students, update_trip_student, create_location_update,
+    get_all_active_trips_for_driver, mark_students_boarded,
+    mark_students_dropped_off, get_trip_student, calculate_distance_meters
+)
 from app.services.student import get_students_by_bus_route, get_student_by_id, get_student_guardians
-from app.services.notification import notify_guardians_student_boarding, notify_dropoff_pending_confirmation, notify_guardians_arrival
+from app.services.notification import (
+    notify_guardians_student_boarding,
+    notify_guardians_student_unboarding,
+    notify_dropoff_pending_confirmation,
+    notify_guardians_arrival,
+    notify_guardians_bus_arrival_at_stop
+)
 from app.utils.qrcode import verify_student_qr_code
 from app.services.bus import get_bus_by_id, get_bus_route_by_id, get_bus_drivers, get_buses, get_bus_routes
+
 from app.core.exceptions import NotFoundException, InvalidDataException
 from app.models.trip import StudentStatus, TripStudent, TripDirection, Trip
 from sqlalchemy import select, func
@@ -317,17 +333,31 @@ async def update_student_status(
         # If no record exists yet, it's fine to create one
         pass
 
-    updated_student = await update_trip_student(db, trip_id, student_id, student_data.dict(exclude_unset=True))
+    update_data = student_data.dict(exclude_unset=True)
+    if student_data.status == StudentStatus.ON_BUS and not student_data.boarded_at:
+        update_data["boarded_at"] = datetime.now()
+    elif student_data.status in (StudentStatus.DROPPED_OFF, StudentStatus.AT_SCHOOL) and not student_data.disembarked_at:
+        update_data["disembarked_at"] = datetime.now()
 
-    if student_data.status == StudentStatus.ON_BUS and student_data.boarded_at:
+    updated_student = await update_trip_student(db, trip_id, student_id, update_data)
+
+    if student_data.status == StudentStatus.ON_BUS:
+        boarded_time = (update_data.get("boarded_at") or datetime.now()).strftime("%H:%M")
         await notify_guardians_student_boarding(
             db,
             student_id=student_id,
             bus_number=trip.bus.bus_number,
-            time=student_data.boarded_at.strftime("%H:%M")
+            time=boarded_time
         )
     elif student_data.status == StudentStatus.DROPPED_OFF:
         await notify_dropoff_pending_confirmation(db, student, trip)
+        await notify_guardians_student_unboarding(
+            db,
+            student_id=student_id,
+            bus_number=trip.bus.bus_number,
+            location_name=getattr(student.bus_stop, 'name', None),
+            time=datetime.now().strftime("%H:%M")
+        )
     elif student_data.status == StudentStatus.AT_SCHOOL:
         await notify_guardians_arrival(
             db,
@@ -337,6 +367,7 @@ async def update_student_status(
         )
 
     return updated_student
+
 
 
 @router.post(
@@ -370,22 +401,43 @@ async def update_trip_location(
 
     location_update = await create_location_update(db, location_data=location_data_dict)
 
-    # Fixed parameter order: broadcast(message, room_id)
-    await manager.broadcast(
-        {
-            "type": "location_update",
-            "trip_id": trip.id,
-            "bus_id": trip.bus_id,
-            "location": {
-                "latitude": float(location_update.latitude),
-                "longitude": float(location_update.longitude),
-                "speed": float(location_update.speed) if location_update.speed else 0,
-                "heading": float(location_update.heading) if location_update.heading else 0,
-                "timestamp": location_update.timestamp.isoformat(),
-            }
-        },
-        str(trip_id)
-    )
+    # Check if arrived near any stop on this route
+    arrived_stop = None
+    if trip.route and hasattr(trip.route, 'stops') and trip.route.stops:
+        for rs in trip.route.stops:
+            if rs.stop:
+                try:
+                    s_lat = float(rs.stop.latitude)
+                    s_lon = float(rs.stop.longitude)
+                    dist = calculate_distance_meters(float(location_update.latitude), float(location_update.longitude), s_lat, s_lon)
+                    if dist <= 120.0:
+                        arrived_stop = {
+                            "stop_id": rs.stop.id,
+                            "stop_name": rs.stop.name,
+                            "distance_meters": round(dist, 1)
+                        }
+                        break
+                except (ValueError, TypeError):
+                    pass
+
+    broadcast_data = {
+        "type": "location_update",
+        "trip_id": trip.id,
+        "bus_id": trip.bus_id,
+        "location": {
+            "latitude": float(location_update.latitude),
+            "longitude": float(location_update.longitude),
+            "speed": float(location_update.speed) if location_update.speed else 0,
+            "heading": float(location_update.heading) if location_update.heading else 0,
+            "timestamp": location_update.timestamp.isoformat(),
+        }
+    }
+    if arrived_stop:
+        broadcast_data["arrived_stop"] = arrived_stop
+
+    # Broadcast to room
+    await manager.broadcast(broadcast_data, str(trip_id))
+
     
 
     return location_update
@@ -519,21 +571,19 @@ async def delete_my_incident(
 
 @router.post(
     "/students/verify-qr",
-    summary="Verify student QR code and board onto active trip",
-    description="Allows a driver to scan and verify a student's QR code, which boards them onto the current active trip."
+    summary="Verify student QR code and board or unboard from active trip",
+    description="Allows a driver to scan and verify a student's QR code. If student is not yet on the bus, boards them. If already onboard, unboards / drops them off at the stop."
 )
 async def verify_student_qr(
-    # FIX: Changed to accept a JSON object, which is standard
     qr_data: dict, 
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_active_user)
 ):
     """
-    Verifies a student's QR code. If valid, it finds the driver's single active trip
-    and updates the student's status to 'on_bus' for that trip.
+    Verifies a student's QR code. Intelligently boards or unboards the student onto the driver's active trip
+    and triggers corresponding notifications to guardians.
     """
     try:
-        # Pass the actual data string from the JSON object
         student = await verify_student_qr_code(qr_data.get("qr_data"), db)
     except InvalidDataException as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
@@ -544,38 +594,92 @@ async def verify_student_qr(
     if student.school_id != current_user.school_id:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Student does not belong to your school.")
 
-    # --- This is the critical new logic ---
     active_trips = await get_all_active_trips_for_driver(db, driver_id=current_user.id)
     
     if not active_trips:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="You do not have an active trip to board students onto.")
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="You do not have an active trip to board or unboard students.")
     
-    # Ensure there is only one active trip for clarity
     if len(active_trips) > 1:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Multiple active trips found. Please contact an administrator.")
     
     active_trip = active_trips[0]
+    action_requested = qr_data.get("action", "auto")
 
-    # Board the student onto the found active trip
-    updated_trip_student = await update_student_status_on_trip(
-        db,
-        trip_id=active_trip.id,
-        student_id=student.id,
-        status=StudentStatus.ON_BUS
-    )
+    # Check current student status on this trip
+    current_trip_student = None
+    try:
+        current_trip_student = await get_trip_student(db, active_trip.id, student.id)
+    except NotFoundException:
+        pass
 
-    # Notify guardians when student boards via QR
-    await notify_guardians_student_boarding(
-        db,
-        student_id=student.id,
-        bus_number=active_trip.bus.bus_number,
-        time=datetime.now().strftime("%H:%M")
-    )
+    # Determine if action is unboarding or boarding
+    is_already_onboard = (current_trip_student and current_trip_student.status == StudentStatus.ON_BUS)
+    should_unboard = (action_requested in ["unboard", "drop_off"]) or (action_requested == "auto" and is_already_onboard)
 
-    if not updated_trip_student:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Student {student.first_name} is not assigned to this trip.")
+    if should_unboard:
+        # UNBOARD / DROP OFF
+        target_status = StudentStatus.AT_SCHOOL if active_trip.direction == TripDirection.TO_SCHOOL else StudentStatus.DROPPED_OFF
+        updated_trip_student = await update_student_status_on_trip(
+            db,
+            trip_id=active_trip.id,
+            student_id=student.id,
+            status=target_status
+        )
 
-    return {"valid": True, "student": student}
+        now_time = datetime.now().strftime("%H:%M")
+        if target_status == StudentStatus.AT_SCHOOL:
+            await notify_guardians_arrival(
+                db,
+                student_id=student.id,
+                location="School",
+                time=now_time
+            )
+        else:
+            await notify_dropoff_pending_confirmation(db, student, active_trip)
+            await notify_guardians_student_unboarding(
+                db,
+                student_id=student.id,
+                bus_number=active_trip.bus.bus_number,
+                location_name=getattr(student.bus_stop, 'name', None),
+                time=now_time
+            )
+
+        return {
+            "valid": True,
+            "action": "unboarded",
+            "status": target_status,
+            "student": student,
+            "message": f"Student {student.first_name} {student.last_name} has unboarded/dropped off from bus {active_trip.bus.bus_number}."
+        }
+
+    else:
+        # BOARD ONTO BUS
+        updated_trip_student = await update_student_status_on_trip(
+            db,
+            trip_id=active_trip.id,
+            student_id=student.id,
+            status=StudentStatus.ON_BUS
+        )
+
+        # Notify guardians when student boards via QR
+        await notify_guardians_student_boarding(
+            db,
+            student_id=student.id,
+            bus_number=active_trip.bus.bus_number,
+            time=datetime.now().strftime("%H:%M")
+        )
+
+        if not updated_trip_student:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Student {student.first_name} is not assigned to this trip.")
+
+        return {
+            "valid": True,
+            "action": "boarded",
+            "status": StudentStatus.ON_BUS,
+            "student": student,
+            "message": f"Student {student.first_name} {student.last_name} has boarded bus {active_trip.bus.bus_number}."
+        }
+
 
 @router.post(
     "/trips/{trip_id}/mark-boarded",
@@ -606,7 +710,6 @@ async def mark_students_boarded_endpoint(
 
     # Notify guardians only for the students who were marked as boarded
     for student_id in boarding_data.student_ids:
-        # This will silently fail if a student isn't found, which is acceptable here
         try:
             student = await get_student_by_id(db, student_id)
             if student:
@@ -620,4 +723,60 @@ async def mark_students_boarded_endpoint(
             continue
 
     return {"message": "Selected students have been marked as boarded."}
+
+
+@router.post(
+    "/trips/{trip_id}/mark-dropped-off",
+    summary="Mark selected students as dropped off / unboarded",
+    description="Marks a list of students as dropped off or unboarded from the trip and notifies their guardians."
+)
+async def mark_students_dropped_off_endpoint(
+    trip_id: int,
+    dropoff_data: MarkStudentsDroppedOffRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user = Depends(get_current_driver)
+):
+    try:
+        trip = await get_trip_by_id(db, trip_id)
+    except NotFoundException as e:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=e.message
+        )
+
+    if trip.driver_id != current_user.id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You don't have access to this trip"
+        )
+
+    await mark_students_dropped_off(db, trip_id, dropoff_data.student_ids, dropoff_data.stop_id)
+
+    # Notify guardians only for the students who were marked as dropped off
+    now_time = datetime.now().strftime("%H:%M")
+    for student_id in dropoff_data.student_ids:
+        try:
+            student = await get_student_by_id(db, student_id)
+            if student:
+                if trip.direction == TripDirection.TO_SCHOOL:
+                    await notify_guardians_arrival(
+                        db,
+                        student_id=student.id,
+                        location="School",
+                        time=now_time
+                    )
+                else:
+                    await notify_dropoff_pending_confirmation(db, student, trip)
+                    await notify_guardians_student_unboarding(
+                        db,
+                        student_id=student.id,
+                        bus_number=trip.bus.bus_number,
+                        location_name=getattr(student.bus_stop, 'name', None),
+                        time=now_time
+                    )
+        except NotFoundException:
+            continue
+
+    return {"message": "Selected students have been marked as dropped off / unboarded."}
+
 

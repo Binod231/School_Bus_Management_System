@@ -3,7 +3,7 @@ from typing import Optional, List
 from datetime import datetime, date
 from pydantic.networks import EmailStr
 from app.schemas.user import UserResponse
-from app.schemas.bus import BusRouteResponse
+from app.schemas.bus import BusRouteResponse, BusStopResponse
 class StudentBase(BaseModel):
     first_name: str
     last_name: str
@@ -101,6 +101,7 @@ class StudentResponse(StudentBase):
     school_id: int
     bus_route: Optional[BusRouteResponse] = None
     bus_route_id: Optional[int] = None
+    bus_stop: Optional[BusStopResponse] = None
     bus_stop_id: Optional[int] = None
     qr_code: Optional[str] = None
     is_active: bool

@@ -29,9 +29,11 @@ services:
     container_name: school_bus_web
     restart: always
     command: >
-      sh -c "until pg_isready -h school_bus_db -U ${POSTGRES_USER} -d ${POSTGRES_DB}; do echo 'Waiting for DB'; sleep 2; done;
+      sh -c "until pg_isready -h school_bus_db -U $${POSTGRES_USER} -d $${POSTGRES_DB}; do echo 'Waiting for DB'; sleep 2; done;
+             echo 'DB is ready, waiting a few more seconds for full initialization...';
+             sleep 5;
              cd /app/app/migrations;
-             alembic upgrade head;
+             alembic upgrade head || { echo 'Migration failed, retrying in 5s...'; sleep 5; alembic upgrade head; };
              cd /app;
              uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload"
     volumes:
@@ -45,6 +47,8 @@ services:
         condition: service_started
     env_file:
       - .env
+    environment:
+      - DATABASE_URL=postgresql+asyncpg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@school_bus_db:5432/${POSTGRES_DB}
 
 volumes:
   postgres_data:

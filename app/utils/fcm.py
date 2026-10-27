@@ -115,3 +115,33 @@ async def send_arrival_notification(guardian_tokens: list, student_name: str, lo
     }
     
     await send_push_notification(guardian_tokens, title, message, data)
+
+
+async def send_student_unboarding_notification(guardian_tokens: list, student_name: str, bus_number: str, stop_name: str, time: str):
+    """Send notification when student unboards / drops off at a stop"""
+    title = "Student Dropped Off at Stop"
+    message = f"{student_name} has unboarded bus {bus_number} at {stop_name} at {time}."
+    data = {
+        "type": "unboarding",
+        "student_name": student_name,
+        "bus_number": bus_number,
+        "stop_name": stop_name,
+        "time": time
+    }
+    
+    await send_push_notification(guardian_tokens, title, message, data)
+
+
+async def send_bus_stop_arrival_notification(guardian_tokens: list, student_name: str, bus_number: str, stop_name: str, time: str):
+    """Send notification when bus arrives at student's stop"""
+    title = "Bus Arrived at Stop"
+    message = f"Bus {bus_number} for {student_name} has arrived at {stop_name} at {time}."
+    data = {
+        "type": "stop_arrival",
+        "student_name": student_name,
+        "bus_number": bus_number,
+        "stop_name": stop_name,
+        "time": time
+    }
+    
+    await send_push_notification(guardian_tokens, title, message, data)

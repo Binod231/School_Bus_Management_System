@@ -5,10 +5,15 @@ from typing import List
 from app.db.session import get_db
 from app.core.jwt import get_current_guardian
 from app.schemas.student import StudentResponse
-from app.schemas.trip import TripResponse, LocationUpdateResponse
+from app.schemas.trip import TripResponse, LocationUpdateResponse, StudentLiveTrackingResponse
 from app.schemas.incident import IncidentResponse
 from app.services.student import get_guardian_students, get_student_by_id, get_guardian_by_user_id, get_guardian_student_relationship
-from app.services.trip import get_student_trips, get_trip_location_updates as get_trip_location_updates_service, get_trip_by_id, get_trip_students, get_active_student_trip, update_trip_student, get_trip_student
+from app.services.trip import (
+    get_student_trips, get_trip_location_updates as get_trip_location_updates_service,
+    get_trip_by_id, get_trip_students, get_active_student_trip, update_trip_student,
+    get_trip_student, get_student_live_tracking
+)
+
 from app.services.student import update_guardian, get_students_by_guardian_id
 from app.core.exceptions import NotFoundException
 from app.services.notification import notify_admin_arrival_confirmation
@@ -394,3 +399,59 @@ async def get_my_students_incidents(
 
     incidents = await get_guardian_incidents_filtered(db, current_user.id, skip=skip, limit=limit)
     return incidents
+
+
+@router.get(
+    "/students/{student_id}/live-tracking",
+    response_model=StudentLiveTrackingResponse,
+    summary="Get live bus tracking for student",
+    description="Allows a parent/guardian to see real-time location, ETA, stop arrival status, and bus details for their child's trip."
+)
+async def get_student_live_tracking_endpoint(
+    student_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_user = Depends(get_current_guardian)
+):
+    try:
+        guardian = await get_guardian_by_user_id(db, current_user.id)
+    except NotFoundException as e:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=e.message)
+
+    if not await get_guardian_student_relationship(db, guardian.id, student_id):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You don't have access to this student"
+        )
+
+    try:
+        tracking_data = await get_student_live_tracking(db, student_id)
+        return tracking_data
+    except NotFoundException as e:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
+
+
+@router.get(
+    "/live-tracking",
+    response_model=List[StudentLiveTrackingResponse],
+    summary="Get live bus tracking for all guardian's students",
+    description="Retrieves live tracking data for all students linked to the current guardian who have active trips."
+)
+async def get_all_students_live_tracking(
+    db: AsyncSession = Depends(get_db),
+    current_user = Depends(get_current_guardian)
+):
+    try:
+        guardian = await get_guardian_by_user_id(db, current_user.id)
+    except NotFoundException as e:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=e.message)
+
+    students = await get_students_by_guardian_id(db, guardian.id)
+    results = []
+    for student in students:
+        try:
+            tracking = await get_student_live_tracking(db, student.id)
+            results.append(tracking)
+        except Exception:
+            continue
+
+    return results

@@ -17,7 +17,8 @@ async def get_student_by_id(db: AsyncSession, student_id: int) -> Student:
             .selectinload(GuardianStudent.guardian)
             .selectinload(Guardian.user),
             # Use joinedload for directly related objects that are essential
-            joinedload(Student.bus_route).joinedload(BusRoute.bus)
+            joinedload(Student.bus_route).joinedload(BusRoute.bus),
+            joinedload(Student.bus_stop)
         )
         .where(Student.id == student_id)
     )
@@ -45,7 +46,8 @@ async def get_students(
             
             # ✅ THE FIX: Force a SQL JOIN to load the bus_route and its nested bus object.
             # This ensures the data is available before the response is sent.
-            joinedload(Student.bus_route).joinedload(BusRoute.bus)
+            joinedload(Student.bus_route).joinedload(BusRoute.bus),
+            joinedload(Student.bus_stop)
         )
     )
     
