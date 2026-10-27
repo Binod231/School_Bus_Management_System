@@ -29,11 +29,11 @@ class Student(Base):
     
     # Bus route association
     bus_route_id = Column(Integer, ForeignKey("bus_routes.id"), nullable=True)
-    bus_route = relationship("BusRoute", back_populates="students")
+    bus_route = relationship("BusRoute", back_populates="students", lazy="selectin")
     
     # Bus stop association
     bus_stop_id = Column(Integer, ForeignKey("bus_stops.id"), nullable=True)
-    bus_stop = relationship("BusStop", back_populates="students")
+    bus_stop = relationship("BusStop", back_populates="students", lazy="selectin")
     
     # Relationships
     guardians = relationship("GuardianStudent", back_populates="student")

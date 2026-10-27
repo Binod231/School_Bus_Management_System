@@ -27,6 +27,7 @@ async def get_trip_by_id(db: AsyncSession, trip_id: int) -> Trip:
             selectinload(Trip.students).options(
                 joinedload(TripStudent.student).options(
                     joinedload(Student.bus_route),
+                    joinedload(Student.bus_stop),
                     selectinload(Student.guardians).options(
                         joinedload(GuardianStudent.guardian).options(
                             joinedload(Guardian.user)
@@ -58,7 +59,15 @@ async def get_trips(
         joinedload(Trip.bus),
         joinedload(Trip.route),
         selectinload(Trip.students).options(
-            joinedload(TripStudent.student)
+            joinedload(TripStudent.student).options(
+                joinedload(Student.bus_route),
+                joinedload(Student.bus_stop),
+                selectinload(Student.guardians).options(
+                    joinedload(GuardianStudent.guardian).options(
+                        joinedload(Guardian.user)
+                    )
+                )
+            )
         )
     )
     
@@ -97,6 +106,7 @@ async def get_driver_trips(db: AsyncSession, driver_id: int, skip: int = 0, limi
             .selectinload(TripStudent.student)
             .options(
                 selectinload(Student.bus_route).selectinload(BusRoute.bus),
+                selectinload(Student.bus_stop),
                 selectinload(Student.guardians)
                 .selectinload(GuardianStudent.guardian)
                 .selectinload(Guardian.user)
@@ -242,7 +252,15 @@ async def create_trip(db: AsyncSession, trip_data: dict) -> Trip:
         select(Trip)
         .where(Trip.id == db_trip.id)
         .options(
-            selectinload(Trip.students).selectinload(TripStudent.student),
+            selectinload(Trip.students)
+            .selectinload(TripStudent.student)
+            .options(
+                selectinload(Student.bus_route),
+                selectinload(Student.bus_stop),
+                selectinload(Student.guardians)
+                .selectinload(GuardianStudent.guardian)
+                .selectinload(Guardian.user)
+            ),
             selectinload(Trip.bus),
             selectinload(Trip.route)
         )
@@ -345,6 +363,7 @@ async def update_trip(db: AsyncSession, trip_id: int, trip_data: dict) -> Trip:
             .selectinload(TripStudent.student)
             .options(
                  selectinload(Student.bus_route).selectinload(BusRoute.bus),
+                 selectinload(Student.bus_stop),
                  selectinload(Student.guardians)
                 .selectinload(GuardianStudent.guardian)
                 .selectinload(Guardian.user)
@@ -546,6 +565,7 @@ async def get_all_active_trips_for_driver(db: AsyncSession, driver_id: int) -> L
             .selectinload(TripStudent.student)
             .options(
                  selectinload(Student.bus_route).selectinload(BusRoute.bus),
+                 selectinload(Student.bus_stop),
                  selectinload(Student.guardians)
                 .selectinload(GuardianStudent.guardian)
                 .selectinload(Guardian.user)
@@ -631,6 +651,8 @@ async def get_student_trips(db: AsyncSession, student_id: int, skip: int = 0, li
             selectinload(Trip.route),
             selectinload(Trip.students).options(
                 selectinload(TripStudent.student).options(
+                    selectinload(Student.bus_route),
+                    selectinload(Student.bus_stop),
                     selectinload(Student.guardians).options(
                         selectinload(GuardianStudent.guardian).options(
                             selectinload(Guardian.user)
@@ -719,9 +741,13 @@ async def get_active_trips_with_locations(db: AsyncSession, school_id: Optional[
         selectinload(Trip.route),
         selectinload(Trip.students)
         .selectinload(TripStudent.student)
-        .selectinload(Student.guardians)
-        .selectinload(GuardianStudent.guardian)
-        .selectinload(Guardian.user),
+        .options(
+            selectinload(Student.bus_route),
+            selectinload(Student.bus_stop),
+            selectinload(Student.guardians)
+            .selectinload(GuardianStudent.guardian)
+            .selectinload(Guardian.user)
+        ),
         selectinload(Trip.location_updates) # Load all location updates
     ).order_by(Trip.scheduled_start.desc())
 
