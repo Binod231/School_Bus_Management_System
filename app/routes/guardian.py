@@ -1,7 +1,8 @@
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status, Query, Body
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
-from typing import List
+from typing import List, Optional
+from pydantic import BaseModel
 from app.db.session import get_db
 from app.core.jwt import get_current_guardian
 from app.schemas.student import StudentResponse
@@ -210,6 +211,10 @@ async def update_fcm_token(
     return {"message": "FCM token updated successfully"}
 
 
+class ConfirmArrivalPayload(BaseModel):
+    confirmed: Optional[bool] = None
+
+
 @router.post(
     "/confirm-arrival/{student_id}",
     summary="Confirm student arrival",
@@ -217,10 +222,18 @@ async def update_fcm_token(
 )
 async def confirm_student_arrival(
     student_id: int,
-    confirmed: bool = True,
+    confirmed: Optional[bool] = Query(None),
+    payload: Optional[ConfirmArrivalPayload] = Body(None),
     db: AsyncSession = Depends(get_db),
     current_user = Depends(get_current_guardian)
 ):
+    # Resolve confirmed status (payload body has priority, then query param, default True)
+    is_confirmed = True
+    if payload is not None and payload.confirmed is not None:
+        is_confirmed = payload.confirmed
+    elif confirmed is not None:
+        is_confirmed = confirmed
+
     try:
         guardian = await get_guardian_by_user_id(db, current_user.id)
     except NotFoundException as e:
@@ -236,11 +249,9 @@ async def confirm_student_arrival(
             detail="You don't have access to this student"
         )
 
-
     # Find the trip where the student is either:
     # 1. DROPPED_OFF (waiting for confirmation after trip completed), OR
     # 2. ON_BUS (still on active FROM_SCHOOL trip but arrived home)
-
     stmt = (
         select(Trip)
         .join(TripStudent, TripStudent.trip_id == Trip.id)
@@ -256,23 +267,43 @@ async def confirm_student_arrival(
                 )
             )
         )
-        .order_by(Trip.scheduled_start.desc()) # Get the most recent one
+        .order_by(Trip.scheduled_start.desc())
         .limit(1)
     )
     result = await db.execute(stmt)
     active_trip = result.scalar_one_or_none()
 
+    # Fallback: check if student is already AT_HOME (already confirmed)
+    if not active_trip:
+        already_home_stmt = (
+            select(TripStudent)
+            .where(
+                and_(
+                    TripStudent.student_id == student_id,
+                    TripStudent.status == StudentStatus.AT_HOME
+                )
+            )
+            .order_by(TripStudent.updated_at.desc())
+            .limit(1)
+        )
+        already_home = (await db.execute(already_home_stmt)).scalar_one_or_none()
+        if already_home:
+            return {"message": "Arrival already confirmed successfully"}
+
+        # Or check if any recent trip exists for student
+        recent_trip_stmt = (
+            select(Trip)
+            .join(TripStudent, TripStudent.trip_id == Trip.id)
+            .where(TripStudent.student_id == student_id)
+            .order_by(Trip.scheduled_start.desc())
+            .limit(1)
+        )
+        active_trip = (await db.execute(recent_trip_stmt)).scalar_one_or_none()
+
     if not active_trip:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="No active FROM_SCHOOL trip found for this student"
-        )
-
-    # Requirement 1: Check if the trip direction is from school
-    if active_trip.direction != "from_school":
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Arrival can only be confirmed for trips from school."
+            detail="No trip found for this student to confirm arrival."
         )
 
     try:
@@ -283,18 +314,26 @@ async def confirm_student_arrival(
             detail=e.message
         )
 
+    # Check direction case-insensitively, allowing confirmation if student was marked DROPPED_OFF
+    direction_str = str(getattr(active_trip.direction, 'value', active_trip.direction)).upper()
+    if direction_str != TripDirection.FROM_SCHOOL.value and trip_student.status != StudentStatus.DROPPED_OFF:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Arrival can only be confirmed for trips from school."
+        )
+
     # Requirement 2: Set the student's status to 'at_home'
     update_data = {
-        "status": StudentStatus.AT_HOME if confirmed else StudentStatus.ON_BUS,
-        "disembarked_at": datetime.now() if confirmed else None
+        "status": StudentStatus.AT_HOME if is_confirmed else StudentStatus.ON_BUS,
+        "disembarked_at": datetime.now() if is_confirmed else None
     }
 
     await update_trip_student(db, active_trip.id, student_id, update_data)
 
     student = await get_student_by_id(db, student_id)
-    await notify_admin_arrival_confirmation(db, student, current_user, confirmed)
+    await notify_admin_arrival_confirmation(db, student, current_user, is_confirmed)
 
-    return {"message": f"Arrival {'confirmed' if confirmed else 'not confirmed'} successfully"}
+    return {"message": f"Arrival {'confirmed' if is_confirmed else 'not confirmed'} successfully"}
 
 @router.get(
     "/students/{student_id}/active-trip",
