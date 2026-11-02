@@ -4,7 +4,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from typing import List, Dict
 from app.core.config import settings
 from app.db.session import get_db
-from app.routes import auth, superadmin, admin, driver, guardian, bus, incident, school
+from app.routes import auth, superadmin, admin, driver, guardian, bus, incident, school, public
 from app.services.school import get_schools_with_admin_status
 from app.schemas.school import SchoolResponse
 from app.core.cache import redis_client
@@ -51,6 +51,7 @@ app.include_router(guardian.router, prefix=settings.API_V1_STR, tags=["guardian"
 app.include_router(bus.router, prefix=settings.API_V1_STR, tags=["bus"])
 app.include_router(incident.router, prefix=settings.API_V1_STR, tags=["incidents"])
 app.include_router(school.router, prefix=settings.API_V1_STR, tags=["schools"])
+app.include_router(public.router, prefix=settings.API_V1_STR, tags=["public"])
 
 
 @app.get("/health")
