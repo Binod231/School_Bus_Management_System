@@ -30,7 +30,8 @@ from sqlalchemy import func, select, and_
 from app.services.student import create_guardian_student, GuardianStudent, create_guardian, get_guardians, get_guardian_by_user_id, delete_guardian_by_user_id,  update_student as update_student_service,delete_student as delete_student_service, get_student_by_id, get_guardian_by_id
 from app.schemas.bus import BusStopCreate, BusStopUpdate, BusStopResponse, BusRouteResponse
 from app.services.bus import create_bus_stop, get_bus_stops as get_bus_stops_service, update_bus_stop, delete_bus_stop, get_bus_stop_by_id
-from app.services.trip import get_active_trips_with_locations
+from app.services.trip import get_active_trips_with_locations, cleanup_old_location_updates
+from app.core.config import settings
 from datetime import datetime, timedelta
 from fastapi.responses import Response
 from app.schemas.trip import TripResponse, EmergencyTransferRequest, EmergencyTransferResponse
@@ -1698,3 +1699,32 @@ async def emergency_bus_transfer(
         "new_driver_name": f"{target_driver.first_name} {target_driver.last_name}",
         "message": f"Successfully transferred {len(transfer_students)} student(s) to Bus {target_bus.bus_number} with driver {target_driver.first_name}."
     }
+
+
+@router.post(
+    "/system/cleanup-locations",
+    summary="Purge historical GPS location pings",
+    description="Deletes raw location updates older than specified days (default 60 days) to prevent table bloat and optimize database performance."
+)
+async def trigger_location_cleanup(
+    days: int = Query(default=60, ge=1, le=365, description="Delete records older than this many days"),
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_admin)
+):
+    if current_user.role not in [UserRole.ADMIN, UserRole.SUPERADMIN]:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only administrators can trigger system maintenance."
+        )
+
+    result = await cleanup_old_location_updates(
+        db=db,
+        days=days,
+        batch_size=settings.LOCATION_CLEANUP_BATCH_SIZE
+    )
+    return {
+        "status": "success",
+        "message": f"Successfully purged {result['deleted_count']} location update(s) older than {days} days.",
+        **result
+    }
+

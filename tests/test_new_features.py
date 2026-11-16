@@ -1,6 +1,9 @@
 import pytest
-from datetime import date, datetime
+from datetime import date, datetime, timedelta, timezone
 from app.core.cache import redis_client
+from app.models.trip import LocationUpdate
+from app.services.trip import cleanup_old_location_updates
+from sqlalchemy import select
 
 @pytest.mark.asyncio
 async def test_single_use_ws_ticket(client, test_setup):
@@ -229,3 +232,71 @@ async def test_emergency_breakdown_bus_transfer(client, test_setup):
     assert t_data["original_trip_id"] == old_trip_id
     assert t_data["new_trip_id"] != old_trip_id
     assert t_data["transferred_students_count"] >= 1
+
+
+@pytest.mark.asyncio
+async def test_cleanup_old_location_updates_service(db_session, test_setup):
+    """Verifies that cleanup_old_location_updates removes stale records older than N days and retains recent ones."""
+    trip_id = test_setup["trip"].id
+    now = datetime.now(timezone.utc)
+    old_time = now - timedelta(days=75)
+    recent_time = now - timedelta(days=10)
+
+    # Insert 3 old updates and 2 recent updates
+    old_updates = [
+        LocationUpdate(trip_id=trip_id, latitude=27.7100, longitude=85.3200, speed=20.0, timestamp=old_time),
+        LocationUpdate(trip_id=trip_id, latitude=27.7101, longitude=85.3201, speed=22.0, timestamp=old_time),
+        LocationUpdate(trip_id=trip_id, latitude=27.7102, longitude=85.3202, speed=25.0, timestamp=old_time),
+    ]
+    recent_updates = [
+        LocationUpdate(trip_id=trip_id, latitude=27.7200, longitude=85.3300, speed=30.0, timestamp=recent_time),
+        LocationUpdate(trip_id=trip_id, latitude=27.7201, longitude=85.3301, speed=32.0, timestamp=recent_time),
+    ]
+
+    db_session.add_all(old_updates + recent_updates)
+    await db_session.commit()
+
+    # Verify all 5 were inserted
+    res_before = await db_session.execute(select(LocationUpdate).where(LocationUpdate.trip_id == trip_id))
+    assert len(res_before.scalars().all()) >= 5
+
+    # Run cleanup with retention of 60 days
+    cleanup_res = await cleanup_old_location_updates(db=db_session, days=60, batch_size=10)
+    assert cleanup_res["success"] is True
+    assert cleanup_res["deleted_count"] >= 3
+    assert cleanup_res["retention_days"] == 60
+
+    # Verify old updates were deleted and recent updates remain
+    res_after = await db_session.execute(select(LocationUpdate).where(LocationUpdate.trip_id == trip_id))
+    remaining = res_after.scalars().all()
+    # None of the remaining updates should be older than 60 days
+    cutoff = now - timedelta(days=60)
+    for loc in remaining:
+        assert loc.timestamp >= cutoff
+
+
+@pytest.mark.asyncio
+async def test_admin_cleanup_location_endpoint(client, test_setup):
+    """Verifies that only authorized admins can trigger the location cleanup endpoint."""
+    admin_headers = {"Authorization": f"Bearer {test_setup['admin_token']}"}
+    guardian_headers = {"Authorization": f"Bearer {test_setup['guardian_token']}"}
+
+    # Non-admin (guardian) attempt must be rejected with 403 Forbidden
+    forbidden_resp = await client.post(
+        "/api/v1/admin/system/cleanup-locations?days=60",
+        headers=guardian_headers
+    )
+    assert forbidden_resp.status_code == 403
+
+    # Admin request succeeds
+    admin_resp = await client.post(
+        "/api/v1/admin/system/cleanup-locations?days=60",
+        headers=admin_headers
+    )
+    assert admin_resp.status_code == 200, admin_resp.text
+    data = admin_resp.json()
+    assert data["status"] == "success"
+    assert "deleted_count" in data
+    assert data["retention_days"] == 60
+    assert "cutoff_date" in data
+

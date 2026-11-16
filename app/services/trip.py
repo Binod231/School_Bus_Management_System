@@ -9,7 +9,7 @@ from app.models.user import User, UserRole
 from app.models.student import Student
 from app.core.exceptions import NotFoundException
 from typing import Optional, List
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from sqlalchemy.orm import selectinload, joinedload
 from app.models.student import GuardianStudent, Guardian, Student
 from app.services.student import get_students_by_bus_route, get_students_by_guardian_id
@@ -457,7 +457,7 @@ async def mark_students_boarded(db: AsyncSession, trip_id: int, student_ids: Lis
     """
     Marks a specific list of students as boarded for a trip.
     """
-    from datetime import datetime
+    from datetime import datetime, timedelta, timezone
 
     for student_id in student_ids:
         try:
@@ -1095,4 +1095,48 @@ async def get_student_live_tracking(db: AsyncSession, student_id: int) -> dict:
         },
         "websocket_endpoint": f"/ws/trips/{active_trip.id}/location",
         "is_trip_active": (active_trip.status == TripStatus.IN_PROGRESS)
+    }
+
+
+async def cleanup_old_location_updates(
+    db: AsyncSession,
+    days: int = 60,
+    batch_size: int = 5000
+) -> dict:
+    """
+    Deletes raw GPS location updates older than `days` days from the `location_updates` table.
+    Performs deletion in batches to avoid table bloat, long locks, and WAL spikes.
+    """
+    cutoff = datetime.now(timezone.utc) - timedelta(days=days)
+    deleted_count = 0
+    batches_processed = 0
+
+    while True:
+        subq = (
+            select(LocationUpdate.id)
+            .where(LocationUpdate.timestamp < cutoff)
+            .limit(batch_size)
+        )
+        res = await db.execute(subq)
+        ids = res.scalars().all()
+
+        if not ids:
+            break
+
+        del_stmt = delete(LocationUpdate).where(LocationUpdate.id.in_(ids))
+        await db.execute(del_stmt)
+        await db.commit()
+
+        deleted_count += len(ids)
+        batches_processed += 1
+
+        if len(ids) < batch_size:
+            break
+
+    return {
+        "success": True,
+        "deleted_count": deleted_count,
+        "retention_days": days,
+        "cutoff_date": cutoff.isoformat(),
+        "batches_processed": batches_processed
     }

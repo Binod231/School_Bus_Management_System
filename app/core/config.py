@@ -37,6 +37,12 @@ class Settings(BaseSettings):
     
     # CORS
     BACKEND_CORS_ORIGINS: list = ["http://localhost:3000", "http://localhost:8000", "http://localhost:3001", "http://192.168.100.70:3000"]
+    
+    # Location Updates Retention & Maintenance
+    LOCATION_RETENTION_DAYS: int = int(os.getenv("LOCATION_RETENTION_DAYS", "60"))
+    ENABLE_LOCATION_AUTO_CLEANUP: bool = os.getenv("ENABLE_LOCATION_AUTO_CLEANUP", "true").lower() in ("true", "1", "yes")
+    LOCATION_CLEANUP_INTERVAL_HOURS: int = int(os.getenv("LOCATION_CLEANUP_INTERVAL_HOURS", "24"))
+    LOCATION_CLEANUP_BATCH_SIZE: int = int(os.getenv("LOCATION_CLEANUP_BATCH_SIZE", "5000"))
      
     class Config:
         case_sensitive = True

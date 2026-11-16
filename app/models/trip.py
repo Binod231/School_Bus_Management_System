@@ -92,6 +92,6 @@ class LocationUpdate(Base):
     longitude = Column(Float, nullable=False)
     speed = Column(Float, nullable=True)
     heading = Column(Float, nullable=True)
-    timestamp = Column(DateTime(timezone=True), server_default=func.now())
+    timestamp = Column(DateTime(timezone=True), server_default=func.now(), index=True)
     
     trip = relationship("Trip", back_populates="location_updates")
