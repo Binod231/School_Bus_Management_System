@@ -90,6 +90,8 @@ class GuardianStudentResponse(GuardianStudentBase):
     id: int
     guardian_id: int
     student_id: int
+    alert_radius_meters: Optional[float] = 500.0
+    notify_on_approaching: Optional[bool] = True
     created_at: datetime
     guardian: GuardianForStudentResponse
 
@@ -117,3 +119,34 @@ class StudentWithGuardiansResponse(StudentResponse):
 
 class GuardianWithStudentsResponse(GuardianResponse):
     students: List[GuardianStudentResponse] = []
+
+
+class AlertPreferenceUpdate(BaseModel):
+    alert_radius_meters: float
+    notify_on_approaching: bool = True
+
+
+class AlertPreferenceResponse(BaseModel):
+    student_id: int
+    alert_radius_meters: float
+    notify_on_approaching: bool
+
+
+class StudentAbsenceCreate(BaseModel):
+    date: date
+    trip_type: str = "ALL_DAY"  # MORNING, AFTERNOON, ALL_DAY
+    reason: Optional[str] = None
+
+
+class StudentAbsenceResponse(BaseModel):
+    id: int
+    student_id: int
+    school_id: int
+    date: date
+    trip_type: str
+    reason: Optional[str] = None
+    reported_by_id: int
+    created_at: datetime
+
+    class Config:
+        from_attributes = True

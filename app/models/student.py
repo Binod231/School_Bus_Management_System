@@ -62,8 +62,28 @@ class GuardianStudent(Base):
     student_id = Column(Integer, ForeignKey("students.id"), nullable=False)
     relationship_type = Column(String, nullable=False)  # Mother, Father, Grandparent, etc.
     is_primary = Column(Boolean, default=False)
+    alert_radius_meters = Column(Float, default=500.0)
+    notify_on_approaching = Column(Boolean, default=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     
     guardian = relationship("Guardian", back_populates="students")
     student = relationship("Student", back_populates="guardians")
+
+
+class StudentAbsence(Base):
+    __tablename__ = "student_absences"
+
+    id = Column(Integer, primary_key=True, index=True)
+    student_id = Column(Integer, ForeignKey("students.id"), nullable=False)
+    school_id = Column(Integer, ForeignKey("schools.id"), nullable=False)
+    date = Column(Date, nullable=False)
+    trip_type = Column(String, default="ALL_DAY")  # MORNING, AFTERNOON, ALL_DAY
+    reason = Column(Text, nullable=True)
+    reported_by_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+    student = relationship("Student", backref="absences")
+    school = relationship("School")
+    reported_by = relationship("User")
+
     

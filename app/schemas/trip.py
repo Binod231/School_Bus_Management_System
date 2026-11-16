@@ -25,6 +25,8 @@ class StudentStatusEnum(str, Enum):
     on_bus = "ON_BUS"
     dropped_off = "DROPPED_OFF"
     at_school = "AT_SCHOOL"
+    absent = "ABSENT"
+    skipped = "SKIPPED"
 
 
 class TripBase(BaseModel):
@@ -75,7 +77,7 @@ class LocationUpdateBase(BaseModel):
 
 
 class LocationUpdateCreate(LocationUpdateBase):
-    trip_id: int
+    trip_id: Optional[int] = None
 
 
 class LocationUpdateResponse(LocationUpdateBase):
@@ -92,6 +94,9 @@ class TripResponse(TripBase):
     driver_id: int
     actual_start: Optional[datetime] = None
     actual_end: Optional[datetime] = None
+    sweep_verified: Optional[bool] = False
+    sweep_verified_at: Optional[datetime] = None
+    sweep_notes: Optional[str] = None
     created_at: datetime
     updated_at: Optional[datetime] = None
     latest_location: Optional[LocationUpdateResponse] = None
@@ -209,6 +214,7 @@ class LiveTrackingArrivalStatus(BaseModel):
     distance_to_student_stop_meters: Optional[float] = None
     distance_to_student_stop_km: Optional[float] = None
     estimated_minutes_to_stop: Optional[float] = None
+    stops_away: Optional[int] = None
     nearest_stop_name: Optional[str] = None
     status_summary: str
 
@@ -222,4 +228,49 @@ class StudentLiveTrackingResponse(BaseModel):
     current_location: Optional[LiveTrackingBusLocation] = None
     arrival_status: Optional[LiveTrackingArrivalStatus] = None
     websocket_endpoint: Optional[str] = None
-    is_trip_active: bool
+    is_trip_active: bool
+
+
+class TripSweepVerifyRequest(BaseModel):
+    sweep_code: Optional[str] = None
+    notes: Optional[str] = None
+    confirm_seats_empty: bool = True
+
+
+class TripSweepVerifyResponse(BaseModel):
+    trip_id: int
+    sweep_verified: bool
+    sweep_verified_at: datetime
+    remaining_students_on_bus: int
+    remaining_student_names: List[str] = []
+    message: str
+
+
+class TripSOSEvent(BaseModel):
+    latitude: float
+    longitude: float
+    emergency_type: str = "emergency"  # emergency, accident, breakdown, medical
+    description: Optional[str] = "Driver triggered emergency SOS panic button"
+
+
+class TripSOSResponse(BaseModel):
+    incident_id: int
+    trip_id: int
+    status: str
+    broadcast_sent: bool
+    message: str
+
+
+class EmergencyTransferRequest(BaseModel):
+    target_bus_id: int
+    target_driver_id: int
+    reason: str
+
+
+class EmergencyTransferResponse(BaseModel):
+    original_trip_id: int
+    new_trip_id: int
+    transferred_students_count: int
+    new_bus_number: str
+    new_driver_name: str
+    message: str

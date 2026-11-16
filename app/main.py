@@ -1,7 +1,7 @@
 from fastapi import FastAPI, Depends, Query, status
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.ext.asyncio import AsyncSession
-from typing import List, Dict
+from typing import List, Dict, Optional
 from app.core.config import settings
 from app.db.session import get_db
 from app.routes import auth, superadmin, admin, driver, guardian, bus, incident, school, public
@@ -64,30 +64,47 @@ manager = ConnectionManager()
 async def websocket_endpoint(
     websocket: WebSocket,
     trip_id: int,
-    token: str = Query(...)
+    ticket: Optional[str] = Query(None),
+    token: Optional[str] = Query(None)
 ):
     """
-    Handles live location updates. This version correctly manages the DB session
-    and authentication for robust WebSocket compatibility.
+    Handles live location updates.
+    Supports secure single-use 60s tickets (issued via POST /api/v1/auth/ws-ticket)
+    or fallback JWT tokens for backwards compatibility.
     """
+    import json
     db: AsyncSession = AsyncSessionLocal()
     try:
-        # Step 1: Authenticate the user safely
-        user = await get_user_for_websocket(token, db)
-        if not user:
-            await websocket.close(code=status.WS_1008_POLICY_VIOLATION, reason="Invalid token")
+        if ticket:
+            ticket_key = f"ws_ticket:{ticket}"
+            cached_data = await redis_client.get(ticket_key)
+            if cached_data:
+                await redis_client.delete(ticket_key)
+                ticket_info = json.loads(cached_data)
+                if ticket_info.get("trip_id") != trip_id:
+                    await websocket.close(code=status.WS_1008_POLICY_VIOLATION, reason="Ticket not valid for this trip")
+                    return
+            else:
+                await websocket.close(code=status.WS_1008_POLICY_VIOLATION, reason="Invalid or expired ticket")
+                return
+        elif token:
+            user = await get_user_for_websocket(token, db)
+            if not user:
+                await websocket.close(code=status.WS_1008_POLICY_VIOLATION, reason="Invalid token")
+                return
+
+            is_authorized = await authorize_trip_access(db, user, trip_id)
+            if not is_authorized:
+                await websocket.close(code=status.WS_1008_POLICY_VIOLATION, reason="Unauthorized")
+                return
+        else:
+            await websocket.close(code=status.WS_1008_POLICY_VIOLATION, reason="Authentication required (ticket or token)")
             return
 
-        # Step 2: Authorize the user for the requested trip
-        is_authorized = await authorize_trip_access(db, user, trip_id)
-        if not is_authorized:
-            await websocket.close(code=status.WS_1008_POLICY_VIOLATION, reason="Unauthorized")
-            return
-
-        # Step 3: If valid, accept the connection
+        # If valid, accept the connection
         await manager.connect(websocket, str(trip_id))
-        
-        # Step 4: Keep the connection alive
+
+        # Keep the connection alive
         while websocket.application_state == WebSocketState.CONNECTED:
             await websocket.receive_text()
 
@@ -96,6 +113,5 @@ async def websocket_endpoint(
     except Exception as e:
         print(f"An unexpected error occurred in websocket for trip {trip_id}: {e}")
     finally:
-        # CRITICAL: Always close the database session
         await db.close()
  

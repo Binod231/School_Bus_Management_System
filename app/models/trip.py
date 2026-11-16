@@ -27,6 +27,8 @@ class StudentStatus(str, enum.Enum):
     ON_BUS = "ON_BUS"
     DROPPED_OFF = "DROPPED_OFF"
     AT_SCHOOL = "AT_SCHOOL"
+    ABSENT = "ABSENT"
+    SKIPPED = "SKIPPED"
 
 
 class Trip(Base):
@@ -41,6 +43,9 @@ class Trip(Base):
     actual_start = Column(DateTime(timezone=True), nullable=True)
     scheduled_end = Column(DateTime(timezone=True), nullable=False)
     actual_end = Column(DateTime(timezone=True), nullable=True)
+    sweep_verified = Column(Boolean, default=False)
+    sweep_verified_at = Column(DateTime(timezone=True), nullable=True)
+    sweep_notes = Column(Text, nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
     

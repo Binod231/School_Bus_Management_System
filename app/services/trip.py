@@ -886,6 +886,7 @@ async def get_student_live_tracking(db: AsyncSession, student_id: int) -> dict:
                 "distance_to_student_stop_meters": None,
                 "distance_to_student_stop_km": None,
                 "estimated_minutes_to_stop": None,
+                "stops_away": None,
                 "nearest_stop_name": None,
                 "status_summary": "No active trip in progress for this student."
             },
@@ -969,7 +970,8 @@ async def get_student_live_tracking(db: AsyncSession, student_id: int) -> dict:
             else:
                 eta_minutes = round((distance_meters / speed_ms) / 60.0, 1)
 
-    # Calculate nearest stop on route
+    # Calculate nearest stop on route and stops away
+    nearest_stop_sequence = 0
     if active_trip.route and hasattr(active_trip.route, 'stops') and active_trip.route.stops and latest_location:
         min_dist = float('inf')
         for rs in active_trip.route.stops:
@@ -981,8 +983,18 @@ async def get_student_live_tracking(db: AsyncSession, student_id: int) -> dict:
                     if d < min_dist:
                         min_dist = d
                         nearest_stop_name = rs.stop.name
+                        nearest_stop_sequence = rs.sequence if hasattr(rs, 'sequence') else 0
                 except (ValueError, TypeError):
                     pass
+
+    # Sequence-aware multi-stop ETA with boarding dwell time
+    student_stop_seq = student.bus_stop.sequence if student.bus_stop and hasattr(student.bus_stop, 'sequence') else None
+    stops_away = None
+    if student_stop_seq is not None and nearest_stop_sequence:
+        stops_away = max(0, student_stop_seq - nearest_stop_sequence)
+        if eta_minutes is not None and not has_arrived and stops_away > 0:
+            # 1.5 minutes average dwell time per intermediate stop
+            eta_minutes = round(eta_minutes + (stops_away * 1.5), 1)
 
     # Status summary message
     bus_num = active_trip.bus.bus_number if active_trip.bus else "Bus"
@@ -1077,9 +1089,10 @@ async def get_student_live_tracking(db: AsyncSession, student_id: int) -> dict:
             "distance_to_student_stop_meters": distance_meters,
             "distance_to_student_stop_km": distance_km,
             "estimated_minutes_to_stop": eta_minutes,
+            "stops_away": stops_away,
             "nearest_stop_name": nearest_stop_name,
             "status_summary": status_summary
         },
         "websocket_endpoint": f"/ws/trips/{active_trip.id}/location",
         "is_trip_active": (active_trip.status == TripStatus.IN_PROGRESS)
-    }
+    }

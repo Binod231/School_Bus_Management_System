@@ -32,6 +32,9 @@ class BusUpdate(BaseModel):
 class BusResponse(BusBase):
     id: int
     school_id: int
+    current_odometer: Optional[float] = 0.0
+    insurance_expiry: Optional[datetime] = None
+    fitness_certificate_expiry: Optional[datetime] = None
     is_active: bool
     created_at: datetime
     updated_at: Optional[datetime] = None
@@ -199,3 +202,45 @@ class ActiveBusLocation(BaseModel):
     dropped_off_students: int
     arrived_students: int
     student_roster: List[StudentRosterEntry] = []
+
+
+class BusMaintenanceCreate(BaseModel):
+    service_type: str  # ROUTINE, REPAIR, INSPECTION, OIL_CHANGE, TIRES
+    status: Optional[str] = "COMPLETED"
+    cost: Optional[float] = None
+    odometer_reading: Optional[float] = None
+    performed_at: Optional[datetime] = None
+    next_service_due_date: Optional[datetime] = None
+    next_service_due_odometer: Optional[float] = None
+    performed_by: Optional[str] = None
+    notes: Optional[str] = None
+
+
+class BusMaintenanceResponse(BaseModel):
+    id: int
+    bus_id: int
+    school_id: int
+    service_type: str
+    status: str
+    cost: Optional[float] = None
+    odometer_reading: Optional[float] = None
+    performed_at: datetime
+    next_service_due_date: Optional[datetime] = None
+    next_service_due_odometer: Optional[float] = None
+    performed_by: Optional[str] = None
+    notes: Optional[str] = None
+    created_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+class FleetExpiryAlert(BaseModel):
+    bus_id: int
+    bus_number: str
+    license_plate: Optional[str] = None
+    alert_type: str  # INSURANCE_EXPIRING, FITNESS_EXPIRING, SERVICE_OVERDUE
+    severity: str    # WARNING, CRITICAL
+    due_date: Optional[datetime] = None
+    days_remaining: Optional[int] = None
+    message: str

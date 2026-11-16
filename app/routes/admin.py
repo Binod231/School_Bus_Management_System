@@ -8,7 +8,8 @@ from app.schemas.student import StudentCreate, StudentResponse, StudentUpdate, G
 from app.schemas.bus import (
     BusCreate, BusResponse, BusRouteCreate, BusRouteResponse, 
     BusUpdate, BusRouteUpdate, BusDriverCreate, BusRouteStopCreate, 
-    BusRouteStopResponse, BusRouteStopsBulkUpdate
+    BusRouteStopResponse, BusRouteStopsBulkUpdate,
+    BusMaintenanceCreate, BusMaintenanceResponse, FleetExpiryAlert
 )
 from app.core.exceptions import NotFoundException, InvalidDataException
 from app.services.user import create_user, get_users, get_user_by_id, get_user_by_email, update_user, delete_user
@@ -21,18 +22,18 @@ from app.services.bus import (
 )
 from app.utils.email import send_new_user_email
 from app.models.user import UserRole, User
-from app.models.incident import Incident
+from app.models.incident import Incident, IncidentType, IncidentStatus
 from app.models.student import Student
-from app.models.bus import Bus
+from app.models.bus import Bus, BusMaintenance
 from app.models.trip import Trip, TripStudent, StudentStatus, TripDirection
-from sqlalchemy import func, select
+from sqlalchemy import func, select, and_
 from app.services.student import create_guardian_student, GuardianStudent, create_guardian, get_guardians, get_guardian_by_user_id, delete_guardian_by_user_id,  update_student as update_student_service,delete_student as delete_student_service, get_student_by_id, get_guardian_by_id
 from app.schemas.bus import BusStopCreate, BusStopUpdate, BusStopResponse, BusRouteResponse
 from app.services.bus import create_bus_stop, get_bus_stops as get_bus_stops_service, update_bus_stop, delete_bus_stop, get_bus_stop_by_id
 from app.services.trip import get_active_trips_with_locations
-from datetime import datetime
+from datetime import datetime, timedelta
 from fastapi.responses import Response
-from app.schemas.trip import TripResponse
+from app.schemas.trip import TripResponse, EmergencyTransferRequest, EmergencyTransferResponse
 from app.services.incident import get_incidents, create_incident, update_incident, get_incident_by_id, delete_incident
 from app.schemas.incident import IncidentResponse, IncidentUpdate, IncidentCreate
 from sqlalchemy.orm import selectinload, Session, joinedload
@@ -1410,3 +1411,290 @@ async def get_all_bus_locations(
         })
         
     return response_data
+
+
+@router.post(
+    "/buses/{bus_id}/maintenance",
+    response_model=BusMaintenanceResponse,
+    summary="Log bus maintenance record",
+    description="Logs a service, repair, inspection, or oil change for a bus, updating its odometer if provided."
+)
+async def log_bus_maintenance(
+    bus_id: int,
+    maintenance_data: BusMaintenanceCreate,
+    db: AsyncSession = Depends(get_db),
+    current_admin: User = Depends(get_current_admin)
+):
+    bus = await get_bus_by_id(db, bus_id)
+    if not bus:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Bus not found")
+
+    if current_admin.role != UserRole.SUPERADMIN and bus.school_id != current_admin.school_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Bus does not belong to your school")
+
+    # If new odometer reading is higher than current, update bus odometer
+    if maintenance_data.odometer_reading is not None and (bus.current_odometer is None or maintenance_data.odometer_reading > bus.current_odometer):
+        bus.current_odometer = maintenance_data.odometer_reading
+
+    new_maintenance = BusMaintenance(
+        bus_id=bus.id,
+        school_id=bus.school_id,
+        service_type=maintenance_data.service_type,
+        status=maintenance_data.status or "COMPLETED",
+        cost=maintenance_data.cost,
+        odometer_reading=maintenance_data.odometer_reading,
+        performed_at=maintenance_data.performed_at or datetime.utcnow(),
+        next_service_due_date=maintenance_data.next_service_due_date,
+        next_service_due_odometer=maintenance_data.next_service_due_odometer,
+        performed_by=maintenance_data.performed_by,
+        notes=maintenance_data.notes
+    )
+    db.add(new_maintenance)
+    await db.commit()
+    await db.refresh(new_maintenance)
+    return new_maintenance
+
+
+@router.get(
+    "/buses/{bus_id}/maintenance",
+    response_model=List[BusMaintenanceResponse],
+    summary="Get bus maintenance history",
+    description="Retrieves all logged maintenance and service records for a specific bus."
+)
+async def get_bus_maintenance_history(
+    bus_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_admin: User = Depends(get_current_admin)
+):
+    bus = await get_bus_by_id(db, bus_id)
+    if not bus:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Bus not found")
+
+    if current_admin.role != UserRole.SUPERADMIN and bus.school_id != current_admin.school_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Bus does not belong to your school")
+
+    stmt = (
+        select(BusMaintenance)
+        .where(BusMaintenance.bus_id == bus_id)
+        .order_by(BusMaintenance.performed_at.desc())
+    )
+    res = await db.execute(stmt)
+    return res.scalars().all()
+
+
+@router.get(
+    "/fleet/expiry-alerts",
+    response_model=List[FleetExpiryAlert],
+    summary="Get fleet document and maintenance expiry alerts",
+    description="Identifies buses with insurance or fitness certificates expiring within 30 days, or overdue maintenance."
+)
+async def get_fleet_expiry_alerts(
+    db: AsyncSession = Depends(get_db),
+    current_admin: User = Depends(get_current_admin)
+):
+    stmt = (
+        select(Bus)
+        .where(
+            and_(
+                Bus.school_id == current_admin.school_id,
+                Bus.is_active == True
+            )
+        )
+        .options(selectinload(Bus.maintenances))
+    )
+    res = await db.execute(stmt)
+    buses = res.scalars().all()
+
+    now = datetime.utcnow()
+    alerts = []
+
+    for bus in buses:
+        # Check Insurance
+        if bus.insurance_expiry:
+            days_left = (bus.insurance_expiry.replace(tzinfo=None) - now).days
+            if days_left < 0:
+                alerts.append({
+                    "bus_id": bus.id,
+                    "bus_number": bus.bus_number,
+                    "license_plate": bus.license_plate,
+                    "alert_type": "INSURANCE_EXPIRED",
+                    "severity": "CRITICAL",
+                    "due_date": bus.insurance_expiry,
+                    "days_remaining": days_left,
+                    "message": f"Bus {bus.bus_number} insurance expired {abs(days_left)} days ago!"
+                })
+            elif days_left <= 30:
+                alerts.append({
+                    "bus_id": bus.id,
+                    "bus_number": bus.bus_number,
+                    "license_plate": bus.license_plate,
+                    "alert_type": "INSURANCE_EXPIRING",
+                    "severity": "WARNING",
+                    "due_date": bus.insurance_expiry,
+                    "days_remaining": days_left,
+                    "message": f"Bus {bus.bus_number} insurance expires in {days_left} days."
+                })
+
+        # Check Fitness Certificate
+        if bus.fitness_certificate_expiry:
+            days_left = (bus.fitness_certificate_expiry.replace(tzinfo=None) - now).days
+            if days_left < 0:
+                alerts.append({
+                    "bus_id": bus.id,
+                    "bus_number": bus.bus_number,
+                    "license_plate": bus.license_plate,
+                    "alert_type": "FITNESS_EXPIRED",
+                    "severity": "CRITICAL",
+                    "due_date": bus.fitness_certificate_expiry,
+                    "days_remaining": days_left,
+                    "message": f"Bus {bus.bus_number} fitness certificate expired {abs(days_left)} days ago!"
+                })
+            elif days_left <= 30:
+                alerts.append({
+                    "bus_id": bus.id,
+                    "bus_number": bus.bus_number,
+                    "license_plate": bus.license_plate,
+                    "alert_type": "FITNESS_EXPIRING",
+                    "severity": "WARNING",
+                    "due_date": bus.fitness_certificate_expiry,
+                    "days_remaining": days_left,
+                    "message": f"Bus {bus.bus_number} fitness certificate expires in {days_left} days."
+                })
+
+        # Check Next Maintenance Due
+        for m in (bus.maintenances or []):
+            if m.next_service_due_date:
+                m_days = (m.next_service_due_date.replace(tzinfo=None) - now).days
+                if m_days <= 14:
+                    alerts.append({
+                        "bus_id": bus.id,
+                        "bus_number": bus.bus_number,
+                        "license_plate": bus.license_plate,
+                        "alert_type": "SERVICE_OVERDUE" if m_days < 0 else "SERVICE_DUE_SOON",
+                        "severity": "CRITICAL" if m_days < 0 else "WARNING",
+                        "due_date": m.next_service_due_date,
+                        "days_remaining": m_days,
+                        "message": f"Bus {bus.bus_number} scheduled maintenance due in {m_days} days ({m.service_type})."
+                    })
+                    break
+
+    return alerts
+
+
+@router.post(
+    "/trips/{trip_id}/emergency-transfer",
+    response_model=EmergencyTransferResponse,
+    summary="Emergency breakdown passenger transfer",
+    description="Transfers remaining onboard and scheduled students from a disabled bus to a replacement bus and driver."
+)
+async def emergency_bus_transfer(
+    trip_id: int,
+    transfer_data: EmergencyTransferRequest,
+    db: AsyncSession = Depends(get_db),
+    current_admin: User = Depends(get_current_admin)
+):
+    stmt = (
+        select(Trip)
+        .where(Trip.id == trip_id)
+        .options(
+            selectinload(Trip.bus),
+            selectinload(Trip.driver),
+            selectinload(Trip.students).selectinload(TripStudent.student)
+        )
+    )
+    res = await db.execute(stmt)
+    old_trip = res.scalar_one_or_none()
+    if not old_trip:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Original trip not found")
+
+    if current_admin.role != UserRole.SUPERADMIN and old_trip.bus.school_id != current_admin.school_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Trip does not belong to your school")
+
+    target_bus = await get_bus_by_id(db, transfer_data.target_bus_id)
+    if not target_bus:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Target replacement bus not found")
+    if current_admin.role != UserRole.SUPERADMIN and target_bus.school_id != current_admin.school_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Target bus does not belong to your school")
+
+    target_driver = await get_user_by_id(db, transfer_data.target_driver_id)
+    if not target_driver:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Target driver not found")
+
+    # Find uncompleted students (ON_BUS, AT_HOME)
+    transfer_students = [
+        ts for ts in old_trip.students
+        if ts.status in [StudentStatus.ON_BUS, StudentStatus.AT_HOME]
+    ]
+
+    # Create emergency breakdown incident
+    incident = Incident(
+        type=IncidentType.EMERGENCY,
+        status=IncidentStatus.REPORTED,
+        title=f"Emergency Transfer: Bus {old_trip.bus.bus_number} -> Bus {target_bus.bus_number}",
+        description=f"Bus breakdown / emergency transfer: {transfer_data.reason}. {len(transfer_students)} students transferred from Bus {old_trip.bus.bus_number} to Bus {target_bus.bus_number}.",
+        occurred_at=datetime.utcnow(),
+        school_id=current_admin.school_id,
+        reported_by_id=current_admin.id,
+        driver_id=old_trip.driver_id,
+        bus_id=old_trip.bus_id,
+        trip_id=old_trip.id
+    )
+    db.add(incident)
+
+    # Mark old trip as CANCELLED with transfer explanation
+    from app.models.trip import TripStatus
+    old_trip.status = TripStatus.CANCELLED
+    old_trip.sweep_notes = f"Emergency transferred to Bus {target_bus.bus_number}. Reason: {transfer_data.reason}"
+
+    # Create new replacement trip
+    new_trip = Trip(
+        name=f"Transfer: {old_trip.name}",
+        type=old_trip.type,
+        direction=old_trip.direction,
+        status=TripStatus.IN_PROGRESS,
+        scheduled_start=old_trip.scheduled_start,
+        actual_start=datetime.utcnow(),
+        scheduled_end=old_trip.scheduled_end,
+        bus_id=target_bus.id,
+        route_id=old_trip.route_id,
+        driver_id=target_driver.id,
+        sweep_verified=False
+    )
+    db.add(new_trip)
+    await db.flush()
+
+    # Clone students into new trip
+    for ts in transfer_students:
+        new_ts = TripStudent(
+            trip_id=new_trip.id,
+            student_id=ts.student_id,
+            status=ts.status,
+            boarded_at=ts.boarded_at
+        )
+        db.add(new_ts)
+
+    await db.commit()
+
+    # Broadcast notification to guardians
+    try:
+        from app.utils.websocket import manager
+        await manager.broadcast({
+            "type": "EMERGENCY_TRANSFER",
+            "old_trip_id": old_trip.id,
+            "new_trip_id": new_trip.id,
+            "old_bus_number": old_trip.bus.bus_number,
+            "new_bus_number": target_bus.bus_number,
+            "reason": transfer_data.reason,
+            "message": f"Students on Bus {old_trip.bus.bus_number} have been transferred safely to Bus {target_bus.bus_number}."
+        }, str(old_trip.id))
+    except Exception as e:
+        print(f"Warning: Failed to broadcast transfer message: {e}")
+
+    return {
+        "original_trip_id": old_trip.id,
+        "new_trip_id": new_trip.id,
+        "transferred_students_count": len(transfer_students),
+        "new_bus_number": target_bus.bus_number,
+        "new_driver_name": f"{target_driver.first_name} {target_driver.last_name}",
+        "message": f"Successfully transferred {len(transfer_students)} student(s) to Bus {target_bus.bus_number} with driver {target_driver.first_name}."
+    }

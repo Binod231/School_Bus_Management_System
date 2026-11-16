@@ -10,7 +10,9 @@ from app.schemas.user import UserResponse, UserRole
 from app.schemas.trip import (
     TripCreate, TripResponse, TripUpdate, TripStudentUpdate,
     LocationUpdateCreate, LocationUpdateResponse, TripStudentResponse,
-    MarkStudentsBoardedRequest, MarkStudentsDroppedOffRequest
+    MarkStudentsBoardedRequest, MarkStudentsDroppedOffRequest,
+    TripSweepVerifyRequest, TripSweepVerifyResponse, TripSOSEvent, TripSOSResponse,
+    TripStatusEnum
 )
 from app.schemas.student import StudentResponse
 from app.schemas.bus import BusResponse, BusRouteResponse
@@ -18,7 +20,8 @@ from app.services.trip import (
     create_trip, get_driver_trips, get_trip_by_id, update_trip,
     get_trip_students, update_trip_student, create_location_update,
     get_all_active_trips_for_driver, mark_students_boarded,
-    mark_students_dropped_off, get_trip_student, calculate_distance_meters
+    mark_students_dropped_off, get_trip_student, calculate_distance_meters,
+    delete_trip, update_student_status_on_trip
 )
 from app.services.student import get_students_by_bus_route, get_student_by_id, get_student_guardians
 from app.services.notification import (
@@ -26,29 +29,25 @@ from app.services.notification import (
     notify_guardians_student_unboarding,
     notify_dropoff_pending_confirmation,
     notify_guardians_arrival,
-    notify_guardians_bus_arrival_at_stop
+    notify_guardians_bus_arrival_at_stop,
+    notify_guardians_of_trip_incident,
+    notify_guardians_incident
 )
 from app.utils.qrcode import verify_student_qr_code
 from app.services.bus import get_bus_by_id, get_bus_route_by_id, get_bus_drivers, get_buses, get_bus_routes
-
 from app.core.exceptions import NotFoundException, InvalidDataException
 from app.models.trip import StudentStatus, TripStudent, TripDirection, Trip
-from sqlalchemy import select, func
-from datetime import datetime
+from app.models.incident import Incident, IncidentType, IncidentStatus
+from app.models.student import Student, StudentAbsence, GuardianStudent, Guardian
+from app.models.bus import BusRoute, Bus
+from app.models.user import User
+from datetime import datetime, date
+from sqlalchemy import select, func, and_
+from sqlalchemy.orm import selectinload
 from app.utils.websocket import manager
 from app.services.user import get_users
 from app.schemas.incident import IncidentResponse, IncidentUpdate, IncidentCreateForDriver, IncidentUpdateForDriver
-from app.models.student import Student
-from app.models.bus import BusRoute
-from app.models.student import GuardianStudent, Guardian
-from sqlalchemy.orm import selectinload
-from app.services.trip import get_trip_students, delete_trip, update_student_status_on_trip
-from app.services.incident import get_driver_incidents
-from app.models.user import User
-from app.services.bus import Bus
-from app.services.incident import  get_incident_by_id, update_incident_for_driver, delete_incident
-from app.services.notification import notify_guardians_of_trip_incident, notify_guardians_incident
-from app.services.incident import  get_incident_by_id, update_incident, delete_incident, get_user_reported_incidents, create_incident_for_driver
+from app.services.incident import get_driver_incidents, get_incident_by_id, update_incident_for_driver, delete_incident, update_incident, get_user_reported_incidents, create_incident_for_driver
 
 router = APIRouter(
     prefix="/driver",
@@ -251,6 +250,177 @@ async def get_trip_students_list(
     students = result.scalars().all()
     
     return students
+@router.post(
+    "/trips/{trip_id}/verify-sweep",
+    response_model=TripSweepVerifyResponse,
+    summary="Verify end-of-trip rear bus sweep",
+    description="Driver verifies that the interior of the bus has been swept to ensure no child is left behind."
+)
+async def verify_trip_sweep(
+    trip_id: int,
+    sweep_data: TripSweepVerifyRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_driver)
+):
+    try:
+        trip = await get_trip_by_id(db, trip_id)
+    except NotFoundException as e:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=e.message)
+
+    if trip.driver_id != current_user.id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="You don't have access to this trip")
+
+    # Check if any student is still marked ON_BUS
+    stmt = (
+        select(TripStudent)
+        .where(
+            and_(
+                TripStudent.trip_id == trip_id,
+                TripStudent.status == StudentStatus.ON_BUS
+            )
+        )
+        .options(selectinload(TripStudent.student))
+    )
+    res = await db.execute(stmt)
+    students_on_bus = res.scalars().all()
+    remaining_names = [f"{ts.student.first_name} {ts.student.last_name}" for ts in students_on_bus if ts.student]
+
+    now_ts = datetime.utcnow()
+    trip.sweep_verified = True
+    trip.sweep_verified_at = now_ts
+    trip.sweep_notes = sweep_data.notes
+    await db.commit()
+
+    if remaining_names:
+        message = f"Warning: {len(remaining_names)} student(s) still recorded as ON_BUS: {', '.join(remaining_names)}. Please verify they have disembarked safely."
+    else:
+        message = "Bus sweep verified successfully. All passenger seats confirmed clear."
+
+    return {
+        "trip_id": trip.id,
+        "sweep_verified": True,
+        "sweep_verified_at": now_ts,
+        "remaining_students_on_bus": len(remaining_names),
+        "remaining_student_names": remaining_names,
+        "message": message
+    }
+
+
+@router.post(
+    "/trips/{trip_id}/sos",
+    response_model=TripSOSResponse,
+    summary="Driver emergency SOS panic button",
+    description="Immediately triggers an emergency broadcast to school administrators and affected parents with live coordinates."
+)
+async def trigger_trip_sos(
+    trip_id: int,
+    sos_data: TripSOSEvent,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_driver)
+):
+    try:
+        trip = await get_trip_by_id(db, trip_id)
+    except NotFoundException as e:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=e.message)
+
+    if trip.driver_id != current_user.id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="You don't have access to this trip")
+
+    bus_number = trip.bus.bus_number if trip.bus else "Unknown"
+    school_id = trip.bus.school_id if trip.bus else current_user.school_id
+
+    # Create high-priority incident record
+    incident = Incident(
+        type=IncidentType.EMERGENCY,
+        status=IncidentStatus.REPORTED,
+        title=f"EMERGENCY SOS: Bus {bus_number}",
+        description=f"Driver {current_user.first_name} {current_user.last_name} triggered emergency SOS at ({sos_data.latitude}, {sos_data.longitude}). Details: {sos_data.description}",
+        occurred_at=datetime.utcnow(),
+        school_id=school_id,
+        reported_by_id=current_user.id,
+        driver_id=current_user.id,
+        bus_id=trip.bus_id,
+        trip_id=trip.id,
+        latitude=sos_data.latitude,
+        longitude=sos_data.longitude
+    )
+    db.add(incident)
+    await db.commit()
+    await db.refresh(incident)
+
+    # Broadcast emergency alert on WebSocket room
+    await manager.broadcast({
+        "type": "EMERGENCY_SOS",
+        "incident_id": incident.id,
+        "trip_id": trip.id,
+        "bus_number": bus_number,
+        "driver_name": f"{current_user.first_name} {current_user.last_name}",
+        "emergency_type": sos_data.emergency_type,
+        "description": sos_data.description,
+        "latitude": sos_data.latitude,
+        "longitude": sos_data.longitude,
+        "timestamp": datetime.utcnow().isoformat()
+    }, str(trip_id))
+
+    # Notify guardians of trip incident
+    try:
+        await notify_guardians_of_trip_incident(db, incident)
+    except Exception as e:
+        print(f"Warning: Failed to push notifications for SOS incident: {e}")
+
+    return {
+        "incident_id": incident.id,
+        "trip_id": trip.id,
+        "status": "EMERGENCY_BROADCAST_ACTIVE",
+        "broadcast_sent": True,
+        "message": f"Emergency SOS alert for Bus {bus_number} successfully broadcasted to administrators and guardians."
+    }
+
+
+@router.get(
+    "/trips/{trip_id}/absences",
+    summary="Get absent students for today's trip",
+    description="Retrieves a list of students on this trip's route who have submitted an absence notice for today."
+)
+async def get_trip_absences(
+    trip_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_driver)
+):
+    try:
+        trip = await get_trip_by_id(db, trip_id)
+    except NotFoundException as e:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=e.message)
+
+    today = date.today()
+    stmt = (
+        select(StudentAbsence)
+        .join(Student, Student.id == StudentAbsence.student_id)
+        .where(
+            and_(
+                Student.bus_route_id == trip.route_id,
+                StudentAbsence.date == today
+            )
+        )
+        .options(selectinload(StudentAbsence.student))
+    )
+    result = await db.execute(stmt)
+    absences = result.scalars().all()
+
+    return [
+        {
+            "absence_id": a.id,
+            "student_id": a.student_id,
+            "student_name": f"{a.student.first_name} {a.student.last_name}" if a.student else "Unknown",
+            "grade": a.student.grade if a.student else None,
+            "bus_stop_id": a.student.bus_stop_id if a.student else None,
+            "trip_type": a.trip_type,
+            "reason": a.reason
+        }
+        for a in absences
+    ]
+
+
 @router.patch(
     "/trips/{trip_id}",
     response_model=TripResponse,
@@ -276,6 +446,15 @@ async def update_trip_status(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="You don't have access to this trip"
         )
+
+    # Enforce mandatory rear bus sweep before completing the trip
+    if trip_data.status:
+        status_val = trip_data.status.value if hasattr(trip_data.status, 'value') else str(trip_data.status)
+        if status_val == "COMPLETED" and not trip.sweep_verified:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Safety Check Required: You must verify the rear bus sweep before completing this trip. Call POST /api/v1/driver/trips/{id}/verify-sweep first."
+            )
 
     updated_trip = await update_trip(db, trip_id, trip_data.dict(exclude_unset=True))
     return updated_trip
@@ -441,6 +620,17 @@ async def update_trip_location(
     }
     if arrived_stop:
         broadcast_data["arrived_stop"] = arrived_stop
+
+    # Check for speeding or harsh driving telemetry violations (> 60 km/h)
+    speed_kmh = float(location_update.speed) if location_update.speed else 0.0
+    speed_limit = 60.0
+    if speed_kmh > speed_limit:
+        broadcast_data["speed_warning"] = {
+            "level": "WARNING",
+            "speed": speed_kmh,
+            "speed_limit": speed_limit,
+            "message": f"Bus {trip.bus.bus_number if trip.bus else ''} exceeded speed limit: {round(speed_kmh, 1)} km/h (Limit: {speed_limit} km/h)"
+        }
 
     # Broadcast to room
     await manager.broadcast(broadcast_data, str(trip_id))

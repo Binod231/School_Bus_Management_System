@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, Text, DateTime, ForeignKey, Boolean, Enum
+from sqlalchemy import Column, Integer, String, Text, DateTime, ForeignKey, Boolean, Enum, Float
 from sqlalchemy.sql import func
 from sqlalchemy.orm import relationship
 import enum
@@ -55,5 +55,7 @@ class Incident(Base):
     driver_id = Column(Integer, ForeignKey("users.id"), nullable=True)
     bus_id = Column(Integer, ForeignKey("buses.id"), nullable=True)
     trip_id = Column(Integer, ForeignKey("trips.id"), nullable=True)
+    latitude = Column(Float, nullable=True)
+    longitude = Column(Float, nullable=True)
     trip = relationship("Trip", back_populates="incidents")
     

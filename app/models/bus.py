@@ -1,5 +1,5 @@
 # app/models/bus.py
-from sqlalchemy import Column, Integer, String, Text, DateTime, ForeignKey, Boolean
+from sqlalchemy import Column, Integer, String, Text, DateTime, ForeignKey, Boolean, Float, Date
 from sqlalchemy.sql import func
 from sqlalchemy.orm import relationship
 
@@ -18,6 +18,9 @@ class Bus(Base):
     year = Column(Integer, nullable=True)
     color = Column(String, nullable=True)
     license_plate = Column(String, nullable=False)
+    current_odometer = Column(Float, default=0.0)
+    insurance_expiry = Column(DateTime(timezone=True), nullable=True)
+    fitness_certificate_expiry = Column(DateTime(timezone=True), nullable=True)
     is_active = Column(Boolean, default=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
@@ -30,6 +33,7 @@ class Bus(Base):
     drivers = relationship("BusDriver", back_populates="bus")
     routes = relationship("BusRoute", back_populates="bus")
     trips = relationship("Trip", back_populates="bus")
+    maintenances = relationship("BusMaintenance", back_populates="bus", cascade="all, delete-orphan")
 
     def to_dict(self):
         return {c.name: getattr(self, c.name) for c in self.__table__.columns}
@@ -111,3 +115,27 @@ class BusDriver(Base):
 
     bus = relationship("Bus", back_populates="drivers")
     driver = relationship("User", back_populates="driver_buses")
+
+
+class BusMaintenance(Base):
+    __tablename__ = "bus_maintenances"
+
+    id = Column(Integer, primary_key=True, index=True)
+    bus_id = Column(Integer, ForeignKey("buses.id"), nullable=False)
+    school_id = Column(Integer, ForeignKey("schools.id"), nullable=False)
+    service_type = Column(String, nullable=False)  # ROUTINE, REPAIR, INSPECTION, OIL_CHANGE, TIRES
+    status = Column(String, default="COMPLETED")  # SCHEDULED, COMPLETED, CANCELLED
+    cost = Column(Float, nullable=True)
+    odometer_reading = Column(Float, nullable=True)
+    performed_at = Column(DateTime(timezone=True), server_default=func.now())
+    next_service_due_date = Column(DateTime(timezone=True), nullable=True)
+    next_service_due_odometer = Column(Float, nullable=True)
+    performed_by = Column(String, nullable=True)
+    notes = Column(Text, nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+    bus = relationship("Bus", back_populates="maintenances")
+    school = relationship("School")
+
+    def to_dict(self):
+        return {c.name: getattr(self, c.name) for c in self.__table__.columns}

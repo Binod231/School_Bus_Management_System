@@ -5,23 +5,28 @@ from typing import List, Optional
 from pydantic import BaseModel
 from app.db.session import get_db
 from app.core.jwt import get_current_guardian
-from app.schemas.student import StudentResponse
+from app.schemas.student import (
+    StudentResponse,
+    StudentAbsenceCreate,
+    StudentAbsenceResponse,
+    AlertPreferenceUpdate,
+    AlertPreferenceResponse
+)
 from app.schemas.trip import TripResponse, LocationUpdateResponse, StudentLiveTrackingResponse
 from app.schemas.incident import IncidentResponse
-from app.services.student import get_guardian_students, get_student_by_id, get_guardian_by_user_id, get_guardian_student_relationship
+from app.services.student import get_guardian_students, get_student_by_id, get_guardian_by_user_id, get_guardian_student_relationship, update_guardian, get_students_by_guardian_id
 from app.services.trip import (
     get_student_trips, get_trip_location_updates as get_trip_location_updates_service,
     get_trip_by_id, get_trip_students, get_active_student_trip, update_trip_student,
     get_trip_student, get_student_live_tracking
 )
-
-from app.services.student import update_guardian, get_students_by_guardian_id
 from app.core.exceptions import NotFoundException
 from app.services.notification import notify_admin_arrival_confirmation
 from app.services.incident import get_guardian_incidents_filtered
 from app.models.trip import StudentStatus, Trip, TripStudent, TripDirection
-from sqlalchemy import select, and_, or_
-from datetime import datetime
+from app.models.student import StudentAbsence, GuardianStudent, Guardian
+from sqlalchemy import select, and_, or_, delete
+from datetime import datetime, date
 
 router = APIRouter(
     prefix="/guardian",
@@ -493,4 +498,190 @@ async def get_all_students_live_tracking(
         except Exception:
             continue
 
-    return results
+    return results
+
+
+@router.post(
+    "/students/{student_id}/absence",
+    response_model=StudentAbsenceResponse,
+    summary="Submit student absence / skip pickup notice",
+    description="Guardians can notify drivers and school administration that their child will not take the bus for a specific date."
+)
+async def submit_student_absence(
+    student_id: int,
+    absence_data: StudentAbsenceCreate,
+    db: AsyncSession = Depends(get_db),
+    current_user = Depends(get_current_guardian)
+):
+    guardian = await get_guardian_by_user_id(db, current_user.id)
+    is_related = await get_guardian_student_relationship(db, guardian.id, student_id)
+    if not is_related:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You are not authorized to report absences for this student."
+        )
+
+    student = await get_student_by_id(db, student_id)
+    if not student:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Student not found")
+
+    new_absence = StudentAbsence(
+        student_id=student.id,
+        school_id=student.school_id,
+        date=absence_data.date,
+        trip_type=absence_data.trip_type,
+        reason=absence_data.reason,
+        reported_by_id=current_user.id
+    )
+    db.add(new_absence)
+
+    # If the absence is for today, update any scheduled/active trip status to ABSENT
+    today = date.today()
+    if absence_data.date == today:
+        stmt = (
+            select(TripStudent)
+            .join(Trip, Trip.id == TripStudent.trip_id)
+            .where(
+                and_(
+                    TripStudent.student_id == student_id,
+                    Trip.status.in_(["SCHEDULED", "IN_PROGRESS"])
+                )
+            )
+        )
+        res = await db.execute(stmt)
+        active_ts = res.scalars().all()
+        for ts in active_ts:
+            ts.status = StudentStatus.ABSENT
+
+    await db.commit()
+    await db.refresh(new_absence)
+    return new_absence
+
+
+@router.get(
+    "/students/{student_id}/absences",
+    response_model=List[StudentAbsenceResponse],
+    summary="List student absences",
+    description="Lists all logged absences and skip notices for a specific student."
+)
+async def list_student_absences(
+    student_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_user = Depends(get_current_guardian)
+):
+    guardian = await get_guardian_by_user_id(db, current_user.id)
+    is_related = await get_guardian_student_relationship(db, guardian.id, student_id)
+    if not is_related:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You don't have access to this student"
+        )
+
+    stmt = (
+        select(StudentAbsence)
+        .where(StudentAbsence.student_id == student_id)
+        .order_by(StudentAbsence.date.desc())
+    )
+    res = await db.execute(stmt)
+    return res.scalars().all()
+
+
+@router.delete(
+    "/students/{student_id}/absences/{absence_id}",
+    summary="Cancel student absence notice",
+    description="Cancels a previously submitted absence notice if the child will ride the bus after all."
+)
+async def cancel_student_absence(
+    student_id: int,
+    absence_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_user = Depends(get_current_guardian)
+):
+    guardian = await get_guardian_by_user_id(db, current_user.id)
+    is_related = await get_guardian_student_relationship(db, guardian.id, student_id)
+    if not is_related:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You don't have access to this student"
+        )
+
+    stmt = select(StudentAbsence).where(
+        and_(
+            StudentAbsence.id == absence_id,
+            StudentAbsence.student_id == student_id
+        )
+    )
+    res = await db.execute(stmt)
+    absence = res.scalar_one_or_none()
+    if not absence:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Absence record not found")
+
+    await db.delete(absence)
+    await db.commit()
+    return {"message": "Absence notice cancelled successfully"}
+
+
+@router.get(
+    "/students/{student_id}/alert-preferences",
+    response_model=AlertPreferenceResponse,
+    summary="Get guardian alert preferences for student",
+    description="Retrieves custom alert geofence radius (meters) and notification settings."
+)
+async def get_alert_preferences(
+    student_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_user = Depends(get_current_guardian)
+):
+    guardian = await get_guardian_by_user_id(db, current_user.id)
+    stmt = select(GuardianStudent).where(
+        and_(
+            GuardianStudent.guardian_id == guardian.id,
+            GuardianStudent.student_id == student_id
+        )
+    )
+    res = await db.execute(stmt)
+    gs = res.scalar_one_or_none()
+    if not gs:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Student-guardian association not found")
+
+    return {
+        "student_id": student_id,
+        "alert_radius_meters": gs.alert_radius_meters or 500.0,
+        "notify_on_approaching": gs.notify_on_approaching if gs.notify_on_approaching is not None else True
+    }
+
+
+@router.put(
+    "/students/{student_id}/alert-preferences",
+    response_model=AlertPreferenceResponse,
+    summary="Update guardian alert preferences for student",
+    description="Customize geofence distance (e.g., 200m to 3000m) for 'bus is approaching' notifications."
+)
+async def update_alert_preferences(
+    student_id: int,
+    pref_data: AlertPreferenceUpdate,
+    db: AsyncSession = Depends(get_db),
+    current_user = Depends(get_current_guardian)
+):
+    guardian = await get_guardian_by_user_id(db, current_user.id)
+    stmt = select(GuardianStudent).where(
+        and_(
+            GuardianStudent.guardian_id == guardian.id,
+            GuardianStudent.student_id == student_id
+        )
+    )
+    res = await db.execute(stmt)
+    gs = res.scalar_one_or_none()
+    if not gs:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Student-guardian association not found")
+
+    gs.alert_radius_meters = max(50.0, min(5000.0, float(pref_data.alert_radius_meters)))
+    gs.notify_on_approaching = pref_data.notify_on_approaching
+    await db.commit()
+    await db.refresh(gs)
+
+    return {
+        "student_id": student_id,
+        "alert_radius_meters": gs.alert_radius_meters,
+        "notify_on_approaching": gs.notify_on_approaching
+    }

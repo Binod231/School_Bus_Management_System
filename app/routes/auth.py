@@ -1,11 +1,15 @@
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status, Query
 from fastapi.security import OAuth2PasswordRequestForm
 from sqlalchemy.ext.asyncio import AsyncSession
 from datetime import timedelta, datetime
+import uuid
+import json
 from app.db.session import get_db
 from app.core.config import settings
+from app.core.cache import redis_client
 from app.core.security import create_access_token, create_refresh_token, verify_password, get_password_hash
 from app.services.user import create_refresh_token as create_db_refresh_token, authenticate_user, get_user_by_id, get_refresh_token, revoke_refresh_token, get_user_by_email, revoke_all_user_tokens
+from app.services.trip import authorize_trip_access
 from app.schemas.user import Token, UserCreate, UserResponse, PasswordResetRequest, PasswordResetConfirm
 from app.models.user import UserRole, User
 from app.core.exceptions import NotFoundException
@@ -226,5 +230,40 @@ async def read_users_me(current_user: User = Depends(get_current_active_user)):
     Get current logged-in user.
     """
     return current_user
+
+
+@router.post(
+    "/ws-ticket",
+    summary="Generate single-use WebSocket ticket",
+    description="Issues a short-lived (60s) single-use ticket for connecting to live trip WebSocket feeds."
+)
+async def generate_websocket_ticket(
+    trip_id: int = Query(..., description="ID of the trip to subscribe to"),
+    current_user: User = Depends(get_current_active_user),
+    db: AsyncSession = Depends(get_db)
+):
+    # Verify user is authorized for this trip
+    is_authorized = await authorize_trip_access(db, current_user, trip_id)
+    if not is_authorized:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You are not authorized to subscribe to live updates for this trip."
+        )
+
+    ticket = str(uuid.uuid4())
+    ticket_data = json.dumps({
+        "user_id": current_user.id,
+        "trip_id": trip_id,
+        "role": current_user.role.value if hasattr(current_user.role, 'value') else str(current_user.role)
+    })
+    # Store in Redis for 60 seconds
+    await redis_client.set(f"ws_ticket:{ticket}", ticket_data, ex=60)
+
+    return {
+        "ticket": ticket,
+        "expires_in": 60,
+        "trip_id": trip_id
+    }
+
 
 

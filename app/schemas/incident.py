@@ -30,6 +30,8 @@ class IncidentBase(BaseModel):
     occurred_at: datetime
     driver_id: Optional[int] = None
     bus_id: Optional[int] = None
+    latitude: Optional[float] = None
+    longitude: Optional[float] = None
 
 
 class IncidentCreate(IncidentBase):
@@ -91,6 +93,8 @@ class IncidentResponse(BaseModel):
     trip_id: Optional[int] = None
     bus_id: Optional[int] = None
     driver_id: Optional[int] = None
+    latitude: Optional[float] = None
+    longitude: Optional[float] = None
     reported_by: Optional[UserResponse] = None 
 
     class Config:
