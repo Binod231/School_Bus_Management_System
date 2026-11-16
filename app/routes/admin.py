@@ -1443,6 +1443,7 @@ async def log_bus_maintenance(
         service_type=maintenance_data.service_type,
         status=maintenance_data.status or "COMPLETED",
         cost=maintenance_data.cost,
+        currency=maintenance_data.currency or settings.DEFAULT_CURRENCY,
         odometer_reading=maintenance_data.odometer_reading,
         performed_at=maintenance_data.performed_at or datetime.utcnow(),
         next_service_due_date=maintenance_data.next_service_due_date,

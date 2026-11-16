@@ -43,6 +43,10 @@ class Settings(BaseSettings):
     ENABLE_LOCATION_AUTO_CLEANUP: bool = os.getenv("ENABLE_LOCATION_AUTO_CLEANUP", "true").lower() in ("true", "1", "yes")
     LOCATION_CLEANUP_INTERVAL_HOURS: int = int(os.getenv("LOCATION_CLEANUP_INTERVAL_HOURS", "24"))
     LOCATION_CLEANUP_BATCH_SIZE: int = int(os.getenv("LOCATION_CLEANUP_BATCH_SIZE", "5000"))
+    
+    # Currency & Regional (Nepali Rupee - NPR)
+    DEFAULT_CURRENCY: str = os.getenv("DEFAULT_CURRENCY", "NPR")
+    DEFAULT_CURRENCY_SYMBOL: str = os.getenv("DEFAULT_CURRENCY_SYMBOL", "Rs.")
      
     class Config:
         case_sensitive = True

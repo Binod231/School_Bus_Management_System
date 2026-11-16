@@ -125,7 +125,8 @@ class BusMaintenance(Base):
     school_id = Column(Integer, ForeignKey("schools.id"), nullable=False)
     service_type = Column(String, nullable=False)  # ROUTINE, REPAIR, INSPECTION, OIL_CHANGE, TIRES
     status = Column(String, default="COMPLETED")  # SCHEDULED, COMPLETED, CANCELLED
-    cost = Column(Float, nullable=True)
+    cost = Column(Float, nullable=True)  # Cost in Nepali Rupees (NPR / Rs.)
+    currency = Column(String, default="NPR", server_default="NPR")
     odometer_reading = Column(Float, nullable=True)
     performed_at = Column(DateTime(timezone=True), server_default=func.now())
     next_service_due_date = Column(DateTime(timezone=True), nullable=True)

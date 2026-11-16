@@ -180,9 +180,10 @@ async def test_fleet_maintenance_and_expiry_alerts(client, test_setup):
         f"/api/v1/admin/buses/{bus_id}/maintenance",
         json={
             "service_type": "OIL_CHANGE",
-            "cost": 150.0,
+            "cost": 15000.0,
+            "currency": "NPR",
             "odometer_reading": 13200.0,
-            "performed_by": "QuickLube Depot",
+            "performed_by": "Kathmandu Auto Workshop",
             "notes": "Engine oil and filter replaced."
         },
         headers=admin_headers
@@ -190,6 +191,8 @@ async def test_fleet_maintenance_and_expiry_alerts(client, test_setup):
     assert maint_resp.status_code == 200, maint_resp.text
     m_data = maint_resp.json()
     assert m_data["service_type"] == "OIL_CHANGE"
+    assert m_data["cost"] == 15000.0
+    assert m_data["currency"] == "NPR"
 
     # 2. Get maintenance history
     hist_resp = await client.get(

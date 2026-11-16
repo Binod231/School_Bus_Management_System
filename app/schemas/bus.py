@@ -1,4 +1,4 @@
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 from typing import Optional, List
 from datetime import datetime
 from app.schemas.user import UserResponse
@@ -207,7 +207,8 @@ class ActiveBusLocation(BaseModel):
 class BusMaintenanceCreate(BaseModel):
     service_type: str  # ROUTINE, REPAIR, INSPECTION, OIL_CHANGE, TIRES
     status: Optional[str] = "COMPLETED"
-    cost: Optional[float] = None
+    cost: Optional[float] = Field(None, description="Maintenance cost in Nepali Rupees (NPR / Rs.)")
+    currency: Optional[str] = Field("NPR", description="Currency code (defaults to NPR - Nepali Rupee)")
     odometer_reading: Optional[float] = None
     performed_at: Optional[datetime] = None
     next_service_due_date: Optional[datetime] = None
@@ -222,7 +223,8 @@ class BusMaintenanceResponse(BaseModel):
     school_id: int
     service_type: str
     status: str
-    cost: Optional[float] = None
+    cost: Optional[float] = Field(None, description="Maintenance cost in Nepali Rupees (NPR / Rs.)")
+    currency: str = Field("NPR", description="Currency code (defaults to NPR - Nepali Rupee)")
     odometer_reading: Optional[float] = None
     performed_at: datetime
     next_service_due_date: Optional[datetime] = None
