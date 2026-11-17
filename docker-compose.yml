@@ -42,13 +42,32 @@ services:
       - .:/app
       # Firebase Cloud Messaging (FCM) push notification key mount
       - ./firebase-admin-key.json:/app/firebase-admin-key.json:ro
+    expose:
+      - "8000"
     ports:
-      - "80:8000"
+      - "127.0.0.1:8000:8000"
     depends_on:
       - redis
     env_file:
       - .env
 
+  # 4. HTTPS & WSS Reverse Proxy (Caddy with Automatic Let's Encrypt SSL)
+  caddy:
+    image: caddy:alpine
+    container_name: school_bus_caddy
+    restart: always
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - school_bus_web
+
 volumes:
   postgres_data:
   redis_data:
+  caddy_data:
+  caddy_config:

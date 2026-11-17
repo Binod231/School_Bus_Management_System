@@ -17,8 +17,10 @@ services:
     command: >
       sh -c "cd app/migrations && alembic upgrade head && cd ../.. && 
              uvicorn app.main:app --host 0.0.0.0 --port 8000"
+    expose:
+      - "8000"
     ports:
-      - "80:8000"
+      - "127.0.0.1:8000:8000"
     env_file:
       - .env
     volumes:
@@ -27,3 +29,22 @@ services:
       - redis
     extra_hosts:
       - "host.docker.internal:host-gateway"
+
+  # 3. HTTPS & WSS Reverse Proxy (Caddy with Automatic Let's Encrypt SSL)
+  caddy:
+    image: caddy:alpine
+    container_name: school_bus_caddy_prod
+    restart: always
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile
+      - caddy_data_prod:/data
+      - caddy_config_prod:/config
+    depends_on:
+      - school_bus_web
+
+volumes:
+  caddy_data_prod:
+  caddy_config_prod:

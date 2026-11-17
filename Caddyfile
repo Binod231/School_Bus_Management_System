@@ -1,0 +1,11 @@
+{
+    email admin@schoolbus.com
+}
+
+3.208.28.161.sslip.io {
+    reverse_proxy school_bus_web:8000
+}
+
+http://3.208.28.161 {
+    reverse_proxy school_bus_web:8000
+}

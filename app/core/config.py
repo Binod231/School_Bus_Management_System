@@ -56,6 +56,9 @@ class Settings(BaseSettings):
             "http://localhost:3001",
             "http://192.168.100.70:3000",
             "https://main.d1pgaj06vi9yj4.amplifyapp.com",
+            "https://3.208.28.161.sslip.io",
+            "http://3.208.28.161.sslip.io",
+            "http://3.208.28.161",
         ]
         if isinstance(v, str):
             if v.startswith("[") and v.endswith("]"):
