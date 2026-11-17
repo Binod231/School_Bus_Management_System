@@ -420,3 +420,65 @@ async def test_fcm_notification_helpers_and_serialization():
     await send_emergency_transfer_notification(["tok1"], "BUS-12", "BUS-99", "Flat tire replacement")
 
 
+@pytest.mark.asyncio
+async def test_admin_broadcast_custom_notification(client, test_setup):
+    """Verifies that an admin can broadcast festival, holiday, and session notifications."""
+    admin_headers = {"Authorization": f"Bearer {test_setup['admin_token']}"}
+    guardian_headers = {"Authorization": f"Bearer {test_setup['guardian_token']}"}
+
+    # 1. Non-admin attempt should be rejected with 403 Forbidden
+    forbidden_resp = await client.post(
+        "/api/v1/admin/notifications/broadcast",
+        json={
+            "title": "Dashain Holiday Notice",
+            "message": "School will be closed for Dashain vacation.",
+            "target": "GUARDIANS",
+            "category": "FESTIVAL",
+            "send_email": True
+        },
+        headers=guardian_headers
+    )
+    assert forbidden_resp.status_code == 403
+
+    # 2. Admin broadcast to GUARDIANS
+    broadcast_resp = await client.post(
+        "/api/v1/admin/notifications/broadcast",
+        json={
+            "title": "Happy Dashain Festival!",
+            "message": "School and bus services will remain closed from Ashwin 24 to Kartik 5 for Dashain vacation. Happy Dashain!",
+            "target": "GUARDIANS",
+            "category": "FESTIVAL",
+            "send_email": True
+        },
+        headers=admin_headers
+    )
+    assert broadcast_resp.status_code == 200, broadcast_resp.text
+    data = broadcast_resp.json()
+    assert data["status"] == "success"
+    assert data["title"] == "Happy Dashain Festival!"
+    assert data["target"] == "GUARDIANS"
+    assert data["category"] == "FESTIVAL"
+    assert "push_tokens_targeted" in data
+    assert "emails_targeted" in data
+
+    # 3. Admin broadcast to specific ROUTE
+    route_id = test_setup["route"].id
+    route_resp = await client.post(
+        "/api/v1/admin/notifications/broadcast",
+        json={
+            "title": "Route North Schedule Change",
+            "message": "Bus timings for Route North will shift by 15 minutes starting next session.",
+            "target": "ROUTE",
+            "route_id": route_id,
+            "category": "SESSION",
+            "send_email": True
+        },
+        headers=admin_headers
+    )
+    assert route_resp.status_code == 200, route_resp.text
+    route_data = route_resp.json()
+    assert route_data["status"] == "success"
+    assert route_data["target"] == "ROUTE"
+
+
+

@@ -1744,3 +1744,108 @@ async def trigger_location_cleanup(
         **result
     }
 
+
+from app.schemas.notification import BroadcastNotificationRequest, BroadcastNotificationResponse
+
+
+@router.post(
+    "/notifications/broadcast",
+    response_model=BroadcastNotificationResponse,
+    summary="Send custom festival, session, or holiday broadcast notification",
+    description="Dispatches custom push notifications and emails to guardians, drivers, or specific bus routes for festivals, new academic sessions, holidays, or emergency closures."
+)
+async def broadcast_custom_notification(
+    notification_data: BroadcastNotificationRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_admin)
+):
+    from app.utils.fcm import send_push_notification
+    from app.utils.email import send_notification_email
+    from app.services.student import get_student_guardians
+
+    school_id = current_user.school_id
+    if not school_id and current_user.role != UserRole.SUPERADMIN:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Admin must be associated with a school to send broadcast notifications."
+        )
+
+    fcm_tokens = []
+    target_emails = []
+
+    # 1. Collect Guardian Tokens and Emails
+    if notification_data.target in ("GUARDIANS", "ALL", "ROUTE"):
+        if notification_data.target == "ROUTE":
+            if not notification_data.route_id:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="route_id is required when target is set to ROUTE."
+                )
+            stmt = select(Student).where(Student.bus_route_id == notification_data.route_id)
+        else:
+            stmt = select(Student).where(Student.school_id == school_id) if school_id else select(Student)
+
+        res = await db.execute(stmt)
+        students = res.scalars().all()
+
+        for student in students:
+            guardians = await get_student_guardians(db, student.id)
+            for g in guardians:
+                if g.fcm_token:
+                    fcm_tokens.append(g.fcm_token)
+                if g.user and g.user.email:
+                    target_emails.append(g.user.email)
+
+    # 2. Collect Driver Emails
+    if notification_data.target in ("DRIVERS", "ALL"):
+        driver_stmt = select(User).where(
+            User.role == UserRole.DRIVER,
+            User.is_active == True
+        )
+        if school_id:
+            driver_stmt = driver_stmt.where(User.school_id == school_id)
+
+        driver_res = await db.execute(driver_stmt)
+        drivers = driver_res.scalars().all()
+        for d in drivers:
+            if d.email:
+                target_emails.append(d.email)
+
+    unique_tokens = list(set([t for t in fcm_tokens if t]))
+    unique_emails = list(set([e for e in target_emails if e]))
+
+    # 3. Send Push Notifications (FCM)
+    if unique_tokens:
+        await send_push_notification(
+            fcm_tokens=unique_tokens,
+            title=notification_data.title,
+            message=notification_data.message,
+            data={
+                "type": "custom_announcement",
+                "category": notification_data.category or "FESTIVAL",
+                "title": notification_data.title,
+                "message": notification_data.message
+            }
+        )
+
+    # 4. Send Emails (if requested)
+    if notification_data.send_email and unique_emails:
+        for email in unique_emails:
+            await send_notification_email(
+                email=email,
+                student_name="All Students",
+                event_type=notification_data.title,
+                details=notification_data.message,
+                redirect_path="/guardian/dashboard"
+            )
+
+    return BroadcastNotificationResponse(
+        status="success",
+        title=notification_data.title,
+        target=notification_data.target,
+        category=notification_data.category or "FESTIVAL",
+        push_tokens_targeted=len(unique_tokens),
+        emails_targeted=len(unique_emails) if notification_data.send_email else 0,
+        message=f"Broadcast successfully dispatched to {len(unique_tokens)} device(s) and {len(unique_emails) if notification_data.send_email else 0} email(s)."
+    )
+
