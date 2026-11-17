@@ -1,5 +1,8 @@
 # school_bus_management/app/core/config.py
 import os
+import json
+from typing import List, Union
+from pydantic import field_validator
 from pydantic_settings import BaseSettings
 from functools import lru_cache
 
@@ -19,7 +22,7 @@ class Settings(BaseSettings):
     
     # Frontend
     BACKEND_URL: str = os.getenv("BACKEND_URL", "http://localhost:8000")
-    FRONTEND_URL: str = os.getenv("FRONTEND_URL", "http://localhost:3000")
+    FRONTEND_URL: str = os.getenv("FRONTEND_URL", "https://main.d1pgaj06vi9yj4.amplifyapp.com")
     
     # Email
     SMTP_SERVER: str = os.getenv("SMTP_SERVER", "")
@@ -36,7 +39,42 @@ class Settings(BaseSettings):
     FCM_CREDENTIALS_PATH: str = os.getenv("FCM_CREDENTIALS_PATH", "")
     
     # CORS
-    BACKEND_CORS_ORIGINS: list = ["http://localhost:3000", "http://localhost:8000", "http://localhost:3001", "http://192.168.100.70:3000"]
+    BACKEND_CORS_ORIGINS: List[str] = [
+        "http://localhost:3000",
+        "http://localhost:8000",
+        "http://localhost:3001",
+        "http://192.168.100.70:3000",
+        "https://main.d1pgaj06vi9yj4.amplifyapp.com",
+    ]
+
+    @field_validator("BACKEND_CORS_ORIGINS", mode="before")
+    @classmethod
+    def assemble_cors_origins(cls, v: Union[str, List[str]]) -> List[str]:
+        default_origins = [
+            "http://localhost:3000",
+            "http://localhost:8000",
+            "http://localhost:3001",
+            "http://192.168.100.70:3000",
+            "https://main.d1pgaj06vi9yj4.amplifyapp.com",
+        ]
+        if isinstance(v, str):
+            if v.startswith("[") and v.endswith("]"):
+                try:
+                    parsed = json.loads(v)
+                    if isinstance(parsed, list):
+                        v = parsed
+                except Exception:
+                    pass
+            if isinstance(v, str):
+                v = [i.strip() for i in v.split(",") if i.strip()]
+
+        if isinstance(v, (list, tuple)):
+            result = [str(item).strip().rstrip("/") for item in v if item]
+            for origin in default_origins:
+                if origin not in result:
+                    result.append(origin)
+            return result
+        return default_origins
     
     # Location Updates Retention & Maintenance
     LOCATION_RETENTION_DAYS: int = int(os.getenv("LOCATION_RETENTION_DAYS", "60"))
