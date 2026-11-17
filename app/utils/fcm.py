@@ -10,6 +10,7 @@ if settings.FCM_CREDENTIALS_PATH:
     try:
         cred = credentials.Certificate(settings.FCM_CREDENTIALS_PATH)
         firebase_app = firebase_admin.initialize_app(cred)
+        print("Firebase Admin SDK initialized successfully!")
     except FileNotFoundError:
         print(f"Firebase credentials file not found at {settings.FCM_CREDENTIALS_PATH}")
     except Exception as e:
