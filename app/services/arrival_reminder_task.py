@@ -106,7 +106,7 @@ async def check_and_send_arrival_reminders():
                         await send_notification_email(
                             email=email,
                             student_name=student_full_name,
-                            event_type=f"⚠️ Confirm Safe Arrival ({minutes_since_dropoff}m ago)",
+                            event_type=f"Confirm Safe Arrival ({minutes_since_dropoff}m ago)",
                             details=(
                                 f"{student_full_name} was dropped off from Bus #{bus_number} at {stop_name} "
                                 f"(~{minutes_since_dropoff} minutes ago). Please confirm their safe arrival in the EDURIDE app."

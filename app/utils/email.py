@@ -97,10 +97,27 @@ async def send_email(to_email: str, subject: str, body: str):
     except Exception as e:
         print(f"Failed to send email to {to_email}: {str(e)}")
 
+def get_frontend_url(path: str = "") -> str:
+    """
+    Returns the absolute frontend URL for all email links and action buttons.
+    Ensures links always resolve to the deployed AWS Amplify frontend URL
+    (or any configured remote URL) instead of localhost.
+    """
+    base = (getattr(settings, "FRONTEND_URL", "") or "").strip().rstrip("/")
+    if not base or "localhost" in base:
+        base = "https://main.d1pgaj06vi9yj4.amplifyapp.com"
+
+    if path:
+        if not path.startswith("/"):
+            path = "/" + path
+        return f"{base}{path}"
+    return base
+
+
 async def send_password_reset_email(email: str, reset_token: str):
     """Send password reset email"""
     subject = "Reset Your EDURIDE Password"
-    reset_url = f"{settings.FRONTEND_URL}/reset-password?token={reset_token}"
+    reset_url = get_frontend_url(f"/reset-password?token={reset_token}")
     
     content = f"""
         <p>Hello,</p>
@@ -115,14 +132,14 @@ async def send_password_reset_email(email: str, reset_token: str):
 
 async def send_new_user_email(email: str, user_id: int):
     """Send welcome email for new users"""
-    subject = "🎯 Welcome to EDURIDE - Get Started Now"
+    subject = "Welcome to EDURIDE - Get Started Now"
     
     reset_token_expires = timedelta(minutes=60 * 24)
     reset_token = create_access_token(
         data={"sub": str(user_id), "purpose": "password_reset"},
         expires_delta=reset_token_expires
     )
-    reset_url = f"{settings.FRONTEND_URL}/reset-password?token={reset_token}"
+    reset_url = get_frontend_url(f"/reset-password?token={reset_token}")
     
     content = f"""
         <p>Hello and welcome!</p>
@@ -135,10 +152,10 @@ async def send_new_user_email(email: str, user_id: int):
 
 async def send_notification_email(email: str, student_name: str, event_type: str, details: str, redirect_path: str = "/"):
     """Send dynamic notification email to guardians/admins"""
-    subject = f"📢 EDURIDE Alert: {event_type}"
+    subject = f"EDURIDE Alert: {event_type}"
     
-    # Construct full redirect URL
-    action_url = f"{settings.FRONTEND_URL}{redirect_path}"
+    # Construct full redirect URL always pointing to the live frontend
+    action_url = get_frontend_url(redirect_path)
     
     content = f"""
         <p>Hello,</p>

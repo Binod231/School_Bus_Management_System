@@ -103,7 +103,7 @@ async def send_push_notification(fcm_tokens: list, title: str, message: str, dat
 
 async def send_student_boarding_notification(guardian_tokens: list, student_name: str, bus_number: str, time: str):
     """Send notification when student boards the bus"""
-    title = f"🎒 Student Boarded Bus #{bus_number}"
+    title = f"Student Boarded Bus #{bus_number}"
     message = f"{student_name} has safely boarded Bus #{bus_number} at {time}."
     data = {
         "type": "boarding",
@@ -116,7 +116,7 @@ async def send_student_boarding_notification(guardian_tokens: list, student_name
 
 async def send_student_unboarding_notification(guardian_tokens: list, student_name: str, bus_number: str, stop_name: str, time: str):
     """Send notification when student unboards / drops off at a stop"""
-    title = f"🚏 Student Dropped Off - Confirmation Needed"
+    title = f"Student Dropped Off - Confirmation Needed"
     message = f"{student_name} was dropped off from Bus #{bus_number} at {stop_name} at {time}. Please confirm arrival in the app."
     data = {
         "type": "unboarding",
@@ -137,7 +137,7 @@ async def send_arrival_confirmation_reminder_notification(
     minutes_ago: int = 10
 ):
     """Send reminder every 10 minutes until guardian confirms student arrival"""
-    title = f"⚠️ Action Required: Confirm Safe Arrival of {student_name}"
+    title = f"Action Required: Confirm Safe Arrival of {student_name}"
     message = f"{student_name} was dropped off from Bus #{bus_number} at {stop_name} (~{minutes_ago} mins ago). Please confirm their safe arrival immediately."
     data = {
         "type": "confirm_arrival_reminder",
@@ -152,7 +152,7 @@ async def send_arrival_confirmation_reminder_notification(
 
 async def send_bus_stop_arrival_notification(guardian_tokens: list, student_name: str, bus_number: str, stop_name: str, time: str):
     """Send notification when bus arrives at student's stop"""
-    title = f"🚌 Bus #{bus_number} Arrived at Stop"
+    title = f"Bus #{bus_number} Arrived at Stop"
     message = f"Bus #{bus_number} for {student_name} has arrived at {stop_name} ({time})."
     data = {
         "type": "stop_arrival",
@@ -166,7 +166,7 @@ async def send_bus_stop_arrival_notification(guardian_tokens: list, student_name
 
 async def send_bus_location_update(guardian_tokens: list, student_name: str, bus_number: str, location: str, eta: str):
     """Send bus location / approaching stop update notification"""
-    title = f"🚍 Bus #{bus_number} Approaching"
+    title = f"Bus #{bus_number} Approaching"
     message = f"Bus #{bus_number} for {student_name} is near {location}. Estimated Arrival: {eta}."
     data = {
         "type": "location_update",
@@ -180,7 +180,7 @@ async def send_bus_location_update(guardian_tokens: list, student_name: str, bus
 
 async def send_incident_notification(guardian_tokens: list, student_name: str, incident_type: str, details: str):
     """Send urgent incident notification"""
-    title = f"🚨 Incident Alert: {incident_type.replace('_', ' ').title()}"
+    title = f"Incident Alert: {incident_type.replace('_', ' ').title()}"
     message = f"An incident has been reported for {student_name}: {details}"
     data = {
         "type": "incident",
@@ -194,7 +194,7 @@ async def send_incident_notification(guardian_tokens: list, student_name: str, i
 
 async def send_arrival_notification(guardian_tokens: list, student_name: str, location: str, time: str):
     """Send arrival notification"""
-    title = f"✅ Student Arrived at {location}"
+    title = f"Student Arrived at {location}"
     message = f"{student_name} has arrived safely at {location} at {time}."
     data = {
         "type": "arrival",
@@ -207,7 +207,7 @@ async def send_arrival_notification(guardian_tokens: list, student_name: str, lo
 
 async def send_trip_started_notification(guardian_tokens: list, bus_number: str, route_name: str, trip_type: str):
     """Send notification when a trip begins"""
-    title = f"🚀 Trip Started: Bus #{bus_number}"
+    title = f"Trip Started: Bus #{bus_number}"
     message = f"Bus #{bus_number} has started the {trip_type} trip on route {route_name}."
     data = {
         "type": "trip_started",
@@ -220,7 +220,7 @@ async def send_trip_started_notification(guardian_tokens: list, bus_number: str,
 
 async def send_trip_completed_notification(guardian_tokens: list, bus_number: str, route_name: str, trip_type: str):
     """Send notification when a trip completes"""
-    title = f"🏁 Trip Completed: Bus #{bus_number}"
+    title = f"Trip Completed: Bus #{bus_number}"
     message = f"Bus #{bus_number} has completed the {trip_type} trip on route {route_name}."
     data = {
         "type": "trip_completed",
@@ -233,7 +233,7 @@ async def send_trip_completed_notification(guardian_tokens: list, bus_number: st
 
 async def send_emergency_transfer_notification(guardian_tokens: list, old_bus: str, new_bus: str, reason: str):
     """Send notification when students are transferred during an emergency breakdown"""
-    title = f"🔄 Bus Transfer: Bus #{old_bus} ➔ Bus #{new_bus}"
+    title = f"Bus Transfer: Bus #{old_bus} -> Bus #{new_bus}"
     message = f"Students on Bus #{old_bus} have been transferred safely to replacement Bus #{new_bus}. Reason: {reason}."
     data = {
         "type": "emergency_transfer",
