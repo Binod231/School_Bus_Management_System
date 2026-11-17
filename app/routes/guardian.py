@@ -194,26 +194,59 @@ async def get_trip_location_updates(
     return location_updates
 
 
+class FCMTokenPayload(BaseModel):
+    fcm_token: Optional[str] = None
+
+
 @router.post(
     "/fcm-token",
     summary="Update FCM token",
-    description="Allows a guardian to register or update their FCM token for push notifications."
+    description="Allows a guardian to register or update their FCM token for push notifications. Accepts token via JSON body {'fcm_token': '...'} or query parameter ?fcm_token=..."
 )
 async def update_fcm_token(
-    fcm_token: str,
+    payload: Optional[FCMTokenPayload] = None,
+    fcm_token: Optional[str] = Query(None),
     db: AsyncSession = Depends(get_db),
     current_user = Depends(get_current_guardian)
 ):
+    token = (payload.fcm_token if payload and payload.fcm_token else None) or fcm_token
+    if not token or not token.strip():
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="fcm_token is required. Provide it in JSON body {'fcm_token': '...'} or as query param ?fcm_token=..."
+        )
+
     try:
         guardian = await get_guardian_by_user_id(db, current_user.id)
-        await update_guardian(db, guardian.id, {"fcm_token": fcm_token})
+        await update_guardian(db, guardian.id, {"fcm_token": token.strip()})
     except NotFoundException as e:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=e.message
         )
 
-    return {"message": "FCM token updated successfully"}
+    return {
+        "message": "FCM token updated successfully",
+        "has_token": True,
+        "fcm_token": token.strip()
+    }
+
+
+@router.get(
+    "/fcm-token",
+    summary="Check registered FCM token",
+    description="Check whether this guardian has a registered FCM token in the system."
+)
+async def get_fcm_token(
+    db: AsyncSession = Depends(get_db),
+    current_user = Depends(get_current_guardian)
+):
+    guardian = await get_guardian_by_user_id(db, current_user.id)
+    return {
+        "guardian_id": guardian.id,
+        "has_token": bool(guardian.fcm_token),
+        "fcm_token": guardian.fcm_token or ""
+    }
 
 
 class ConfirmArrivalPayload(BaseModel):

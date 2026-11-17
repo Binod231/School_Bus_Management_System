@@ -53,15 +53,17 @@ async def send_push_notification(fcm_tokens: list, title: str, message: str, dat
     Supports Android heads-up alerts with sound, iOS APNS banners, and webpush.
     """
     if not firebase_app:
-        print(f"[FCM Dry-Run] Not initialized. Notification: '{title}' - '{message}'")
+        print(f"[FCM Warning] Firebase Admin SDK is NOT initialized. Push notification '{title}' skipped.")
         return None
 
     if not fcm_tokens:
+        print(f"[FCM Notice] No device tokens registered for recipient(s). Push notification '{title}' skipped. (Guardians must register their device token via POST /api/v1/guardian/fcm-token)")
         return None
 
     # Filter out empty or None tokens
-    valid_tokens = list(set([t for t in fcm_tokens if t and isinstance(t, str)]))
+    valid_tokens = list(set([t for t in fcm_tokens if t and isinstance(t, str) and t.strip()]))
     if not valid_tokens:
+        print(f"[FCM Notice] All provided FCM tokens were empty or invalid for '{title}'. Push skipped.")
         return None
 
     # FCM V1 strictly requires all keys and values in 'data' to be strings
@@ -79,6 +81,7 @@ async def send_push_notification(fcm_tokens: list, title: str, message: str, dat
                 webpush=webpush_config
             )
             response = messaging.send(message_obj)
+            print(f"[FCM Success] Delivered push notification '{title}' to device. Message ID: {response}")
             return response
         else:
             messages = [
@@ -93,11 +96,10 @@ async def send_push_notification(fcm_tokens: list, title: str, message: str, dat
                 for token in valid_tokens
             ]
             batch_response = messaging.send_all(messages)
-            if batch_response.failure_count > 0:
-                print(f"[FCM Warning] Failed to deliver to {batch_response.failure_count}/{len(valid_tokens)} device(s).")
+            print(f"[FCM Summary] Push notification '{title}' sent to {len(valid_tokens)} device(s): {batch_response.success_count} succeeded, {batch_response.failure_count} failed.")
             return batch_response
     except Exception as e:
-        print(f"[FCM Error] Failed to send push notification: {e}")
+        print(f"[FCM Error] Failed to send push notification '{title}': {e}")
         return None
 
 

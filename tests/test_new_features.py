@@ -481,4 +481,41 @@ async def test_admin_broadcast_custom_notification(client, test_setup):
     assert route_data["target"] == "ROUTE"
 
 
+@pytest.mark.asyncio
+async def test_guardian_fcm_token_registration(client, test_setup):
+    """Verifies that a guardian can register their mobile FCM device token via JSON body or query param."""
+    guardian_headers = {"Authorization": f"Bearer {test_setup['guardian_token']}"}
+
+    # 1. Check initial token status
+    get_resp = await client.get("/api/v1/guardian/fcm-token", headers=guardian_headers)
+    assert get_resp.status_code == 200, get_resp.text
+    initial_data = get_resp.json()
+    assert "has_token" in initial_data
+
+    # 2. Register via JSON body
+    post_resp = await client.post(
+        "/api/v1/guardian/fcm-token",
+        json={"fcm_token": "device_token_sample_abc_123"},
+        headers=guardian_headers
+    )
+    assert post_resp.status_code == 200, post_resp.text
+    assert post_resp.json()["has_token"] is True
+    assert post_resp.json()["fcm_token"] == "device_token_sample_abc_123"
+
+    # 3. Check token status after update
+    get_after = await client.get("/api/v1/guardian/fcm-token", headers=guardian_headers)
+    assert get_after.status_code == 200
+    assert get_after.json()["has_token"] is True
+    assert get_after.json()["fcm_token"] == "device_token_sample_abc_123"
+
+    # 4. Register via query parameter fallback
+    query_resp = await client.post(
+        "/api/v1/guardian/fcm-token?fcm_token=device_token_query_xyz_456",
+        headers=guardian_headers
+    )
+    assert query_resp.status_code == 200
+    assert query_resp.json()["fcm_token"] == "device_token_query_xyz_456"
+
+
+
 
