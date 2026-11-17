@@ -189,7 +189,12 @@ async def notify_guardians_of_trip_incident(
             message = f"An incident ('{details}') has been reported for the trip '{trip.name}' involving bus {trip.bus.bus_number}."
             
             if guardian_tokens:
-                await send_push_notification(guardian_tokens, title, message)
+                await send_incident_notification(
+                    guardian_tokens,
+                    f"{student.first_name} {student.last_name}",
+                    incident_type,
+                    details
+                )
 
             for email in guardian_emails:
                 await send_notification_email(email, student.first_name, title, message, redirect_path="/guardian/dashboard")
@@ -243,40 +248,38 @@ async def notify_trip_status_change(
     old_status: str,
     new_status: str
 ):
-    """Notify relevant users about trip status changes"""
-    from app.services.student import get_students_by_bus_route
-    
-    if new_status == "IN_PROGRESS":
-        # Notify guardians that the trip has started
-        students = await get_students_by_bus_route(db, trip.route_id)
-        for student in students:
-            guardians = await get_student_guardians(db, student.id)
-            guardian_emails = [guardian.user.email for guardian in guardians if guardian.user.email]
-            
-            for email in guardian_emails:
+    """Notify relevant users about trip status changes via FCM Push and Email"""
+    from app.services.student import get_students_by_bus_route, get_student_guardians
+    from app.utils.fcm import send_trip_started_notification, send_trip_completed_notification
+
+    bus_number = trip.bus.bus_number if trip.bus else "School Bus"
+    route_name = trip.route.name if trip.route else "Route"
+    trip_type = getattr(trip.type, "value", str(trip.type))
+
+    students = await get_students_by_bus_route(db, trip.route_id)
+    all_fcm_tokens = []
+
+    for student in students:
+        guardians = await get_student_guardians(db, student.id)
+        for g in guardians:
+            if g.fcm_token and g.fcm_token not in all_fcm_tokens:
+                all_fcm_tokens.append(g.fcm_token)
+            if g.user and g.user.email:
+                subject = "Trip Started" if new_status == "IN_PROGRESS" else "Trip Completed"
+                action_text = "started" if new_status == "IN_PROGRESS" else "completed"
                 await send_notification_email(
-                    email,
+                    g.user.email,
                     f"{student.first_name} {student.last_name}",
-                    "Trip Started",
-                    f"Bus {trip.bus.bus_number} has started the {trip.type} trip on route {trip.route.name}",
+                    subject,
+                    f"Bus {bus_number} has {action_text} the {trip_type} trip on route {route_name}.",
                     redirect_path="/guardian/dashboard"
                 )
-    
-    elif new_status == "COMPLETED":
-        # Notify guardians that the trip has completed
-        students = await get_students_by_bus_route(db, trip.route_id)
-        for student in students:
-            guardians = await get_student_guardians(db, student.id)
-            guardian_emails = [guardian.user.email for guardian in guardians if guardian.user.email]
-            
-            for email in guardian_emails:
-                await send_notification_email(
-                    email,
-                    f"{student.first_name} {student.last_name}",
-                    "Trip Completed",
-                    f"Bus {trip.bus.bus_number} has completed the {trip.type} trip on route {trip.route.name}",
-                    redirect_path="/guardian/dashboard"
-                )
+
+    if all_fcm_tokens:
+        if new_status == "IN_PROGRESS":
+            await send_trip_started_notification(all_fcm_tokens, bus_number, route_name, trip_type)
+        elif new_status == "COMPLETED":
+            await send_trip_completed_notification(all_fcm_tokens, bus_number, route_name, trip_type)
 
 
 async def notify_dropoff_pending_confirmation(

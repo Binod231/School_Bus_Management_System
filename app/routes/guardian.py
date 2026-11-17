@@ -335,6 +335,14 @@ async def confirm_student_arrival(
 
     await update_trip_student(db, active_trip.id, student_id, update_data)
 
+    # Clean up reminder key from Redis when confirmed
+    if is_confirmed and trip_student:
+        try:
+            from app.core.cache import redis_client
+            await redis_client.delete(f"arrival_reminder:{trip_student.id}:last_sent")
+        except Exception:
+            pass
+
     student = await get_student_by_id(db, student_id)
     await notify_admin_arrival_confirmation(db, student, current_user, is_confirmed)
 

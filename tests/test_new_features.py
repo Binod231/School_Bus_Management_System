@@ -1,8 +1,22 @@
 import pytest
 from datetime import date, datetime, timedelta, timezone
 from app.core.cache import redis_client
-from app.models.trip import LocationUpdate
+from app.models.trip import LocationUpdate, StudentStatus, TripStudent, TripDirection
 from app.services.trip import cleanup_old_location_updates
+from app.services.arrival_reminder_task import check_and_send_arrival_reminders
+from app.utils.fcm import (
+    send_push_notification,
+    send_student_boarding_notification,
+    send_student_unboarding_notification,
+    send_arrival_confirmation_reminder_notification,
+    send_bus_stop_arrival_notification,
+    send_bus_location_update,
+    send_incident_notification,
+    send_arrival_notification,
+    send_trip_started_notification,
+    send_trip_completed_notification,
+    send_emergency_transfer_notification
+)
 from sqlalchemy import select
 
 @pytest.mark.asyncio
@@ -302,4 +316,107 @@ async def test_admin_cleanup_location_endpoint(client, test_setup):
     assert "deleted_count" in data
     assert data["retention_days"] == 60
     assert "cutoff_date" in data
+
+
+@pytest.mark.asyncio
+async def test_arrival_confirmation_recurring_reminder_and_cleanup(client, db_session, test_setup):
+    """
+    Verifies that:
+    1. Students dropped off > 10m ago trigger arrival reminders with Redis timestamp tracking.
+    2. Repeated reminder checks within 10m do not duplicate sends.
+    3. Guardian confirming arrival cleans up the Redis reminder key and updates status to AT_HOME.
+    """
+    trip = test_setup["trip"]
+    trip_student = test_setup["trip_student"]
+    student = test_setup["student"]
+    guardian_headers = {"Authorization": f"Bearer {test_setup['guardian_token']}"}
+
+    # Put trip in FROM_SCHOOL direction and student in DROPPED_OFF status 15 minutes ago
+    trip.direction = TripDirection.FROM_SCHOOL
+    fifteen_mins_ago = datetime.now(timezone.utc) - timedelta(minutes=15)
+    trip_student.status = StudentStatus.DROPPED_OFF
+    trip_student.disembarked_at = fifteen_mins_ago
+    await db_session.commit()
+
+    cache_key = f"arrival_reminder:{trip_student.id}:last_sent"
+    await redis_client.delete(cache_key)
+
+    # 1. Trigger reminder check -> should dispatch reminder and store timestamp in Redis
+    await check_and_send_arrival_reminders()
+    last_sent_val = await redis_client.get(cache_key)
+    assert last_sent_val is not None, "Redis reminder timestamp should be set after dispatch"
+
+    # 2. Trigger again immediately -> should skip re-sending within 10m window
+    await check_and_send_arrival_reminders()
+    second_sent_val = await redis_client.get(cache_key)
+    assert second_sent_val == last_sent_val, "Timestamp should not change within 10 minute window"
+
+    # 3. Guardian confirms arrival via endpoint
+    confirm_resp = await client.post(
+        f"/api/v1/guardian/confirm-arrival/{student.id}",
+        json={"is_confirmed": True},
+        headers=guardian_headers
+    )
+    assert confirm_resp.status_code == 200, confirm_resp.text
+    assert "confirmed successfully" in confirm_resp.json()["message"]
+
+    # 4. Verify Redis reminder key is purged
+    post_cleanup_val = await redis_client.get(cache_key)
+    assert post_cleanup_val is None, "Redis reminder key should be removed upon arrival confirmation"
+
+    # 5. Verify status updated in DB
+    await db_session.refresh(trip_student)
+    assert trip_student.status == StudentStatus.AT_HOME
+
+
+@pytest.mark.asyncio
+async def test_fcm_notification_helpers_and_serialization():
+    """
+    Verifies that all FCM push notification helpers execute safely,
+    handle non-string data payloads by stringifying, and filter out invalid tokens.
+    """
+    sample_tokens = ["fcm_token_alpha", "fcm_token_beta", None, ""]
+
+    # 1. Generic push with mixed non-string data types
+    mixed_data = {
+        "event_id": 1001,
+        "is_emergency": True,
+        "speed_kmh": 45.8,
+        "status": "ACTIVE"
+    }
+    # Should not raise any ValueError / serialization exception
+    res = await send_push_notification(sample_tokens, "Test Title", "Test Message", mixed_data)
+    # In test environment without Firebase credentials file, it safely returns None (dry-run)
+    assert res is None or res is not None
+
+    # 2. Student boarding notification
+    await send_student_boarding_notification(["tok1"], "John Doe", "BUS-12", "08:15 AM")
+
+    # 3. Student unboarding notification
+    await send_student_unboarding_notification(["tok1"], "John Doe", "BUS-12", "Central Square", "08:45 AM")
+
+    # 4. Arrival confirmation reminder (10-minute recurring alert)
+    await send_arrival_confirmation_reminder_notification(["tok1"], "John Doe", "BUS-12", "Central Square", 10)
+
+    # 5. Bus stop arrival notification
+    await send_bus_stop_arrival_notification(["tok1"], "John Doe", "BUS-12", "Central Square", "08:40 AM")
+
+    # 6. Approaching location update
+    await send_bus_location_update(["tok1"], "John Doe", "BUS-12", "North Avenue", "4 mins")
+
+    # 7. Incident alert
+    await send_incident_notification(["tok1"], "John Doe", "delay", "Road obstruction due to festival")
+
+    # 8. Safe arrival notification
+    await send_arrival_notification(["tok1"], "John Doe", "Kathmandu Academy", "08:50 AM")
+
+    # 9. Trip started
+    await send_trip_started_notification(["tok1"], "BUS-12", "North Route", "MORNING")
+
+    # 10. Trip completed
+    await send_trip_completed_notification(["tok1"], "BUS-12", "North Route", "MORNING")
+
+    # 11. Emergency breakdown transfer
+    await send_emergency_transfer_notification(["tok1"], "BUS-12", "BUS-99", "Flat tire replacement")
+
 

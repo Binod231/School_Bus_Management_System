@@ -17,6 +17,7 @@ from app.models.user import User
 from app.db.session import AsyncSessionLocal
 from app.core.jwt import get_user_for_websocket
 from app.services.cleanup_task import start_location_cleanup_task, stop_location_cleanup_task
+from app.services.arrival_reminder_task import start_arrival_reminder_task, stop_arrival_reminder_task
 
 app = FastAPI(
     title=settings.PROJECT_NAME,
@@ -30,10 +31,12 @@ active_connections: Dict[str, WebSocket] = {}
 async def startup_event():
     await redis_client.ping()
     start_location_cleanup_task()
+    start_arrival_reminder_task()
 
 @app.on_event("shutdown")
 async def shutdown_event():
     stop_location_cleanup_task()
+    stop_arrival_reminder_task()
     await redis_client.close()
 
 # Set up CORS

@@ -364,7 +364,12 @@ async def trigger_trip_sos(
 
     # Notify guardians of trip incident
     try:
-        await notify_guardians_of_trip_incident(db, incident)
+        await notify_guardians_of_trip_incident(
+            db,
+            trip_id=trip.id,
+            incident_type=sos_data.emergency_type,
+            details=sos_data.description
+        )
     except Exception as e:
         print(f"Warning: Failed to push notifications for SOS incident: {e}")
 

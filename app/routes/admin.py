@@ -1689,6 +1689,21 @@ async def emergency_bus_transfer(
             "reason": transfer_data.reason,
             "message": f"Students on Bus {old_trip.bus.bus_number} have been transferred safely to Bus {target_bus.bus_number}."
         }, str(old_trip.id))
+
+        from app.utils.fcm import send_emergency_transfer_notification
+        fcm_tokens = []
+        for ts in transfer_students:
+            student_guardians = await get_student_guardians(db, ts.student_id)
+            for g in student_guardians:
+                if g.fcm_token:
+                    fcm_tokens.append(g.fcm_token)
+        if fcm_tokens:
+            await send_emergency_transfer_notification(
+                guardian_tokens=fcm_tokens,
+                old_bus=old_trip.bus.bus_number,
+                new_bus=target_bus.bus_number,
+                reason=transfer_data.reason or "Vehicle maintenance"
+            )
     except Exception as e:
         print(f"Warning: Failed to broadcast transfer message: {e}")
 
