@@ -1,27 +1,54 @@
 services:
-  # 1. Redis Cache
+  # 1. PostgreSQL Database
+  school_bus_db:
+    image: postgres:13
+    container_name: school_bus_db
+    restart: always
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+      POSTGRES_DB: ${POSTGRES_DB:-school_bus_db}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: [ "CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres} -d ${POSTGRES_DB:-school_bus_db}" ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # 2. Redis Cache & WebSocket Pub/Sub
   redis:
     image: redis:7-alpine
     container_name: school_bus_redis
     restart: always
     ports:
       - "6379:6379"
+    volumes:
+      - redis_data:/data
 
-  # 2. Web Application (Connects to AWS RDS via .env)
+  # 3. Web Application (FastAPI)
   school_bus_web:
     build: .
     container_name: school_bus_web
     restart: always
     command: >
       sh -c "cd /app/app/migrations &&
-             alembic upgrade head &&
+             alembic upgrade head || { echo 'Migration failed, retrying in 5s...'; sleep 5; alembic upgrade head; } &&
              cd /app &&
              uvicorn app.main:app --host 0.0.0.0 --port 8000"
     volumes:
       - .:/app
+      # Firebase Cloud Messaging (FCM) push notification key mount
+      - ./firebase-admin-key.json:/app/firebase-admin-key.json:ro
     ports:
       - "80:8000"
     depends_on:
       - redis
     env_file:
       - .env
+
+volumes:
+  postgres_data:
+  redis_data:

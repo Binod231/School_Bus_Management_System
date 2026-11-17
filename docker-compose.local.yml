@@ -38,6 +38,8 @@ services:
              uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload"
     volumes:
       - .:/app
+      # Firebase Cloud Messaging (FCM) push notification key mount
+      - ./firebase-admin-key.json:/app/firebase-admin-key.json:ro
     ports:
       - "8000:8000"
     depends_on:
