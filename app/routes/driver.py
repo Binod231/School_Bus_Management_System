@@ -1,8 +1,9 @@
 # school_bus_management/app/routes/driver.py
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status, Query
 from sqlalchemy.ext.asyncio import AsyncSession
-from typing import List
+from typing import List, Optional
+from pydantic import BaseModel
 from app.db.session import get_db
 from app.core.jwt import get_current_driver, get_current_active_user
 # CORRECTED: Import UserResponse, not DriverResponse
@@ -66,6 +67,54 @@ async def get_my_profile(
     current_user = Depends(get_current_driver)
 ):
     return current_user
+
+
+class DriverFCMTokenPayload(BaseModel):
+    fcm_token: Optional[str] = None
+
+
+@router.post(
+    "/fcm-token",
+    summary="Update driver FCM token",
+    description="Allows a driver to register or update their FCM token for push notifications. Accepts token via JSON body {'fcm_token': '...'} or query parameter ?fcm_token=..."
+)
+async def update_driver_fcm_token(
+    payload: Optional[DriverFCMTokenPayload] = None,
+    fcm_token: Optional[str] = Query(None),
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_driver)
+):
+    token = (payload.fcm_token if payload and payload.fcm_token else None) or fcm_token
+    if not token or not token.strip():
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="fcm_token is required. Provide it in JSON body {'fcm_token': '...'} or as query param ?fcm_token=..."
+        )
+
+    current_user.fcm_token = token.strip()
+    await db.commit()
+    await db.refresh(current_user)
+
+    return {
+        "message": "Driver FCM token updated successfully",
+        "has_token": True,
+        "fcm_token": current_user.fcm_token
+    }
+
+
+@router.get(
+    "/fcm-token",
+    summary="Check driver registered FCM token",
+    description="Check whether this driver has a registered FCM token in the system."
+)
+async def get_driver_fcm_token(
+    current_user: User = Depends(get_current_driver)
+):
+    return {
+        "driver_id": current_user.id,
+        "has_token": bool(current_user.fcm_token),
+        "fcm_token": current_user.fcm_token or ""
+    }
 
 # RESTORED: Endpoint to get the currently active trip
 @router.get(

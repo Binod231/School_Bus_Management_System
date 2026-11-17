@@ -231,7 +231,19 @@ async def notify_driver_assignment(
     driver,
     bus
 ):
-    """Notify driver about bus assignment"""
+    """Notify driver about bus assignment via Push and Email"""
+    if getattr(driver, "fcm_token", None):
+        await send_push_notification(
+            [driver.fcm_token],
+            title="Bus Assignment",
+            message=f"You have been assigned to bus {bus.bus_number} ({bus.make} {bus.model})",
+            data={
+                "type": "bus_assignment",
+                "bus_id": str(bus.id),
+                "bus_number": str(bus.bus_number)
+            }
+        )
+
     if driver.email:
         await send_notification_email(
             driver.email,

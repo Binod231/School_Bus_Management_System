@@ -517,5 +517,92 @@ async def test_guardian_fcm_token_registration(client, test_setup):
     assert query_resp.json()["fcm_token"] == "device_token_query_xyz_456"
 
 
+@pytest.mark.asyncio
+async def test_driver_fcm_token_registration(client, test_setup):
+    """Verifies that a driver can register their mobile FCM device token via JSON body or query param."""
+    driver_headers = {"Authorization": f"Bearer {test_setup['driver_token']}"}
+
+    # 1. Check initial token status
+    get_resp = await client.get("/api/v1/driver/fcm-token", headers=driver_headers)
+    assert get_resp.status_code == 200, get_resp.text
+    initial_data = get_resp.json()
+    assert "has_token" in initial_data
+    assert initial_data["driver_id"] == test_setup["driver_user"].id
+
+    # 2. Register via JSON body
+    post_resp = await client.post(
+        "/api/v1/driver/fcm-token",
+        json={"fcm_token": "driver_device_token_sample_123"},
+        headers=driver_headers
+    )
+    assert post_resp.status_code == 200, post_resp.text
+    assert post_resp.json()["has_token"] is True
+    assert post_resp.json()["fcm_token"] == "driver_device_token_sample_123"
+
+    # 3. Check token status after update
+    get_after = await client.get("/api/v1/driver/fcm-token", headers=driver_headers)
+    assert get_after.status_code == 200
+    assert get_after.json()["has_token"] is True
+    assert get_after.json()["fcm_token"] == "driver_device_token_sample_123"
+
+    # 4. Register via query parameter fallback
+    query_resp = await client.post(
+        "/api/v1/driver/fcm-token?fcm_token=driver_query_token_456",
+        headers=driver_headers
+    )
+    assert query_resp.status_code == 200
+    assert query_resp.json()["fcm_token"] == "driver_query_token_456"
+
+    # 5. Missing token returns 400
+    bad_resp = await client.post(
+        "/api/v1/driver/fcm-token",
+        json={"fcm_token": ""},
+        headers=driver_headers
+    )
+    assert bad_resp.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_driver_broadcast_and_assignment_notifications(client, test_setup, db_session):
+    """Verifies that drivers with registered FCM tokens are included in admin broadcasts and assignments."""
+    admin_headers = {"Authorization": f"Bearer {test_setup['admin_token']}"}
+    driver_headers = {"Authorization": f"Bearer {test_setup['driver_token']}"}
+
+    # 1. Register driver FCM token
+    reg_resp = await client.post(
+        "/api/v1/driver/fcm-token",
+        json={"fcm_token": "driver_fcm_token_broadcast_test"},
+        headers=driver_headers
+    )
+    assert reg_resp.status_code == 200
+
+    # 2. Admin broadcast targeting DRIVERS
+    broadcast_resp = await client.post(
+        "/api/v1/admin/notifications/broadcast",
+        json={
+            "title": "Winter Schedule Briefing",
+            "message": "All drivers must attend the winter route safety briefing tomorrow at 7 AM.",
+            "target": "DRIVERS",
+            "category": "SESSION",
+            "send_email": True
+        },
+        headers=admin_headers
+    )
+    assert broadcast_resp.status_code == 200, broadcast_resp.text
+    b_data = broadcast_resp.json()
+    assert b_data["status"] == "success"
+    assert b_data["target"] == "DRIVERS"
+    assert b_data["push_tokens_targeted"] >= 1
+    assert b_data["emails_targeted"] >= 1
+
+    # 3. Test notify_driver_assignment push notification dispatch
+    from app.services.notification import notify_driver_assignment
+    await notify_driver_assignment(
+        db=db_session,
+        driver=test_setup["driver_user"],
+        bus=test_setup["bus"]
+    )
+
+
 
 

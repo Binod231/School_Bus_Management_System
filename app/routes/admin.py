@@ -1796,7 +1796,7 @@ async def broadcast_custom_notification(
                 if g.user and g.user.email:
                     target_emails.append(g.user.email)
 
-    # 2. Collect Driver Emails
+    # 2. Collect Driver Tokens and Emails
     if notification_data.target in ("DRIVERS", "ALL"):
         driver_stmt = select(User).where(
             User.role == UserRole.DRIVER,
@@ -1808,6 +1808,8 @@ async def broadcast_custom_notification(
         driver_res = await db.execute(driver_stmt)
         drivers = driver_res.scalars().all()
         for d in drivers:
+            if getattr(d, "fcm_token", None):
+                fcm_tokens.append(d.fcm_token)
             if d.email:
                 target_emails.append(d.email)
 
