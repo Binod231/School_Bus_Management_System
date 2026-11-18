@@ -8,6 +8,7 @@ class UserBase(BaseModel):
     first_name: str
     last_name: str
     phone: Optional[str] = None
+    profile_picture_url: Optional[str] = None
     role: UserRole # Use the imported enum
 
 class UserCreate(UserBase):
@@ -27,6 +28,7 @@ class UserUpdate(BaseModel):
     first_name: Optional[str] = None
     last_name: Optional[str] = None
     phone: Optional[str] = None
+    profile_picture_url: Optional[str] = None
     is_active: Optional[bool] = None
     school_id: Optional[int] = None
     license_number: Optional[str] = None

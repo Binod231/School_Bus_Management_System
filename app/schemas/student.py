@@ -13,6 +13,7 @@ class StudentBase(BaseModel):
     date_of_birth: date
     grade: str
     student_id: str
+    profile_picture_url: Optional[str] = None
     
 
 class StudentCreate(StudentBase):
@@ -41,6 +42,7 @@ class StudentUpdate(BaseModel):
     bus_stop_id: Optional[int] = None
     is_active: Optional[bool] = None
     qr_code: Optional[str] = None
+    profile_picture_url: Optional[str] = None
 
 class GuardianForStudentResponse(BaseModel):
     id: int
@@ -53,6 +55,7 @@ class GuardianBase(BaseModel):
     first_name: str
     last_name: str
     phone: Optional[str] = None
+    profile_picture_url: Optional[str] = None
     # fcm_token: Optional[str] = None
 
 class GuardianCreate(GuardianBase):
@@ -63,6 +66,7 @@ class GuardianUpdate(GuardianBase):
     first_name: Optional[str] = None
     last_name: Optional[str] = None
     phone: Optional[str] = None
+    profile_picture_url: Optional[str] = None
     fcm_token: Optional[str] = None
     student_ids: Optional[List[int]] = None
 

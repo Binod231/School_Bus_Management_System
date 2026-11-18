@@ -166,6 +166,7 @@ class LiveTrackingStudentInfo(BaseModel):
     boarded_at: Optional[datetime] = None
     disembarked_at: Optional[datetime] = None
     assigned_stop: Optional[LiveTrackingStopInfo] = None
+    profile_picture_url: Optional[str] = None
 
 
 class LiveTrackingBusInfo(BaseModel):
@@ -181,6 +182,7 @@ class LiveTrackingDriverInfo(BaseModel):
     id: int
     name: str
     phone: Optional[str] = None
+    profile_picture_url: Optional[str] = None
 
 
 class LiveTrackingTripInfo(BaseModel):

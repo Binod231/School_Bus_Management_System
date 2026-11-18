@@ -19,6 +19,7 @@ class Student(Base):
     grade = Column(String, nullable=False)
     student_id = Column(String, unique=True, nullable=False)
     qr_code = Column(String, nullable=True)
+    profile_picture_url = Column(String, nullable=True)
     is_active = Column(Boolean, default=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())

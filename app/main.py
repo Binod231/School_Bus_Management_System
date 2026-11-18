@@ -17,6 +17,8 @@ from app.models.user import User
 from app.db.session import AsyncSessionLocal
 from app.core.jwt import get_user_for_websocket
 from app.services.cleanup_task import start_location_cleanup_task, stop_location_cleanup_task
+import os
+from fastapi.staticfiles import StaticFiles
 from app.services.arrival_reminder_task import start_arrival_reminder_task, stop_arrival_reminder_task
 
 app = FastAPI(
@@ -60,6 +62,10 @@ app.include_router(bus.router, prefix=settings.API_V1_STR, tags=["bus"])
 app.include_router(incident.router, prefix=settings.API_V1_STR, tags=["incidents"])
 app.include_router(school.router, prefix=settings.API_V1_STR, tags=["schools"])
 app.include_router(public.router, prefix=settings.API_V1_STR, tags=["public"])
+
+# Mount static uploads directory
+os.makedirs("uploads/profiles", exist_ok=True)
+app.mount("/uploads", StaticFiles(directory="uploads"), name="uploads")
 
 
 @app.get("/health")

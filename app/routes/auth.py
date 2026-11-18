@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, status, Query
+from fastapi import APIRouter, Depends, HTTPException, status, Query, UploadFile, File
 from fastapi.security import OAuth2PasswordRequestForm
 from sqlalchemy.ext.asyncio import AsyncSession
 from datetime import timedelta, datetime
@@ -14,6 +14,7 @@ from app.schemas.user import Token, UserCreate, UserResponse, PasswordResetReque
 from app.models.user import UserRole, User
 from app.core.exceptions import NotFoundException
 from app.core.jwt import get_current_active_user
+from app.utils.upload import save_profile_picture, delete_old_profile_picture
 
 router = APIRouter(tags=["auth"])
 
@@ -229,6 +230,38 @@ async def read_users_me(current_user: User = Depends(get_current_active_user)):
     """
     Get current logged-in user.
     """
+    return current_user
+
+
+@router.post("/users/me/profile-picture", response_model=UserResponse)
+async def upload_user_profile_picture(
+    file: UploadFile = File(...),
+    current_user: User = Depends(get_current_active_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Uploads or updates the current authenticated user's profile picture.
+    """
+    delete_old_profile_picture(current_user.profile_picture_url)
+    url = await save_profile_picture(file)
+    current_user.profile_picture_url = url
+    await db.commit()
+    await db.refresh(current_user)
+    return current_user
+
+
+@router.delete("/users/me/profile-picture", response_model=UserResponse)
+async def delete_user_profile_picture(
+    current_user: User = Depends(get_current_active_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Removes the current authenticated user's profile picture.
+    """
+    delete_old_profile_picture(current_user.profile_picture_url)
+    current_user.profile_picture_url = None
+    await db.commit()
+    await db.refresh(current_user)
     return current_user
 
 

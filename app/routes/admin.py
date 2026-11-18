@@ -1,8 +1,9 @@
-from fastapi import APIRouter, Depends, HTTPException, status, Query
+from fastapi import APIRouter, Depends, HTTPException, status, Query, UploadFile, File
 from sqlalchemy.ext.asyncio import AsyncSession
 from typing import List, Optional
 from app.db.session import get_db
 from app.core.jwt import get_current_admin, verify_school_resource_access, get_current_active_user
+from app.utils.upload import save_profile_picture, delete_old_profile_picture
 from app.schemas.user import UserCreate, UserResponse, UserUpdate
 from app.schemas.student import StudentCreate, StudentResponse, StudentUpdate, GuardianUpdate, GuardianCreate, GuardianResponse, GuardianWithStudentsResponse
 from app.schemas.bus import (
@@ -656,6 +657,58 @@ async def delete_driver(
     await delete_user(db, driver_id)
     return {"detail": "Driver deleted"}
 
+
+@router.post(
+    "/drivers/{driver_id}/profile-picture",
+    response_model=UserResponse,
+    summary="Upload driver profile picture"
+)
+async def upload_driver_profile_picture(
+    driver_id: int,
+    file: UploadFile = File(...),
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_admin)
+):
+    try:
+        driver = await get_user_by_id(db, driver_id)
+    except NotFoundException:
+        raise HTTPException(status_code=404, detail="Driver not found")
+
+    if driver.role != UserRole.DRIVER or driver.school_id != current_user.school_id:
+        raise HTTPException(status_code=403, detail="You do not have permission to manage this driver")
+
+    delete_old_profile_picture(driver.profile_picture_url)
+    url = await save_profile_picture(file)
+    driver.profile_picture_url = url
+    await db.commit()
+    await db.refresh(driver)
+    return driver
+
+
+@router.delete(
+    "/drivers/{driver_id}/profile-picture",
+    response_model=UserResponse,
+    summary="Remove driver profile picture"
+)
+async def delete_driver_profile_picture(
+    driver_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_admin)
+):
+    try:
+        driver = await get_user_by_id(db, driver_id)
+    except NotFoundException:
+        raise HTTPException(status_code=404, detail="Driver not found")
+
+    if driver.role != UserRole.DRIVER or driver.school_id != current_user.school_id:
+        raise HTTPException(status_code=403, detail="You do not have permission to manage this driver")
+
+    delete_old_profile_picture(driver.profile_picture_url)
+    driver.profile_picture_url = None
+    await db.commit()
+    await db.refresh(driver)
+    return driver
+
 @router.put(
     "/guardians/{guardian_id}",
     response_model=GuardianWithStudentsResponse,
@@ -812,6 +865,56 @@ async def delete_student(
     if not success:
         raise HTTPException(status_code=404, detail="Student not found")
     return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@router.post(
+    "/students/{student_id}/profile-picture",
+    response_model=StudentResponse,
+    summary="Upload student profile picture"
+)
+async def upload_student_profile_picture(
+    student_id: int,
+    file: UploadFile = File(...),
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_admin)
+):
+    student = await get_student_by_id(db, student_id)
+    if not student:
+        raise HTTPException(status_code=404, detail="Student not found")
+
+    if student.school_id != current_user.school_id:
+        raise HTTPException(status_code=403, detail="You do not have permission to edit this student")
+
+    delete_old_profile_picture(student.profile_picture_url)
+    url = await save_profile_picture(file)
+    student.profile_picture_url = url
+    await db.commit()
+    await db.refresh(student)
+    return await get_student_by_id(db, student_id)
+
+
+@router.delete(
+    "/students/{student_id}/profile-picture",
+    response_model=StudentResponse,
+    summary="Remove student profile picture"
+)
+async def delete_student_profile_picture(
+    student_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_admin)
+):
+    student = await get_student_by_id(db, student_id)
+    if not student:
+        raise HTTPException(status_code=404, detail="Student not found")
+
+    if student.school_id != current_user.school_id:
+        raise HTTPException(status_code=403, detail="You do not have permission to edit this student")
+
+    delete_old_profile_picture(student.profile_picture_url)
+    student.profile_picture_url = None
+    await db.commit()
+    await db.refresh(student)
+    return await get_student_by_id(db, student_id)
 
 # -------------------- BUS & ROUTE UPDATE & DELETE --------------------
 

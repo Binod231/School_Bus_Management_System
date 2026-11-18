@@ -874,7 +874,8 @@ async def get_student_live_tracking(db: AsyncSession, student_id: int) -> dict:
                 "status": "NO_ACTIVE_TRIP",
                 "boarded_at": None,
                 "disembarked_at": None,
-                "assigned_stop": assigned_stop_data
+                "assigned_stop": assigned_stop_data,
+                "profile_picture_url": student.profile_picture_url,
             },
             "trip": None,
             "bus": None,
@@ -1053,7 +1054,8 @@ async def get_student_live_tracking(db: AsyncSession, student_id: int) -> dict:
             "status": current_student_status,
             "boarded_at": boarded_at,
             "disembarked_at": disembarked_at,
-            "assigned_stop": assigned_stop_data
+            "assigned_stop": assigned_stop_data,
+            "profile_picture_url": student.profile_picture_url,
         },
         "trip": {
             "id": active_trip.id,
@@ -1075,7 +1077,8 @@ async def get_student_live_tracking(db: AsyncSession, student_id: int) -> dict:
         "driver": {
             "id": active_trip.driver.id,
             "name": f"{active_trip.driver.first_name} {active_trip.driver.last_name}",
-            "phone": active_trip.driver.phone
+            "phone": active_trip.driver.phone,
+            "profile_picture_url": active_trip.driver.profile_picture_url,
         } if active_trip.driver else None,
         "route": {
             "id": active_trip.route.id,

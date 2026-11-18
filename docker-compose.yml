@@ -42,6 +42,7 @@ services:
       - .:/app
       # Firebase Cloud Messaging (FCM) push notification key mount
       - ./firebase-admin-key.json:/app/firebase-admin-key.json:ro
+      - ./uploads:/app/uploads
     expose:
       - "8000"
     ports:

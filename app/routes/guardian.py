@@ -1,4 +1,5 @@
-from fastapi import APIRouter, Depends, HTTPException, status, Query, Body
+from fastapi import APIRouter, Depends, HTTPException, status, Query, Body, UploadFile, File
+from app.utils.upload import save_profile_picture, delete_old_profile_picture
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 from typing import List, Optional
@@ -56,6 +57,72 @@ async def get_my_students(
     students = await get_students_by_guardian_id(db, guardian.id)
 
     return students
+
+
+@router.post(
+    "/students/{student_id}/profile-picture",
+    response_model=StudentResponse,
+    summary="Upload profile picture for guardian's student"
+)
+async def upload_guardian_student_profile_picture(
+    student_id: int,
+    file: UploadFile = File(...),
+    db: AsyncSession = Depends(get_db),
+    current_user = Depends(get_current_guardian)
+):
+    try:
+        guardian = await get_guardian_by_user_id(db, current_user.id)
+    except NotFoundException as e:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=e.message)
+
+    if not await get_guardian_student_relationship(db, guardian.id, student_id):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You don't have access to this student"
+        )
+
+    student = await get_student_by_id(db, student_id)
+    if not student:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Student not found")
+
+    delete_old_profile_picture(student.profile_picture_url)
+    url = await save_profile_picture(file)
+    student.profile_picture_url = url
+    await db.commit()
+    await db.refresh(student)
+    return await get_student_by_id(db, student_id)
+
+
+@router.delete(
+    "/students/{student_id}/profile-picture",
+    response_model=StudentResponse,
+    summary="Remove profile picture for guardian's student"
+)
+async def delete_guardian_student_profile_picture(
+    student_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_user = Depends(get_current_guardian)
+):
+    try:
+        guardian = await get_guardian_by_user_id(db, current_user.id)
+    except NotFoundException as e:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=e.message)
+
+    if not await get_guardian_student_relationship(db, guardian.id, student_id):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You don't have access to this student"
+        )
+
+    student = await get_student_by_id(db, student_id)
+    if not student:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Student not found")
+
+    delete_old_profile_picture(student.profile_picture_url)
+    student.profile_picture_url = None
+    await db.commit()
+    await db.refresh(student)
+    return await get_student_by_id(db, student_id)
 
 
 @router.get(

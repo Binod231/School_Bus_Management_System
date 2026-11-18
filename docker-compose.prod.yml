@@ -25,6 +25,7 @@ services:
       - .env
     volumes:
       - ./firebase-admin-key.json:/app/firebase-admin-key.json:ro
+      - ./uploads:/app/uploads
     depends_on:
       - redis
     extra_hosts:
