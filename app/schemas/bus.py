@@ -12,6 +12,9 @@ class BusBase(BaseModel):
     year: Optional[int] = None
     color: Optional[str] = None
     license_plate: str
+    current_odometer: Optional[float] = 0.0
+    insurance_expiry: Optional[datetime] = None
+    fitness_certificate_expiry: Optional[datetime] = None
 
 
 class BusCreate(BusBase):
@@ -26,6 +29,9 @@ class BusUpdate(BaseModel):
     year: Optional[int] = None
     color: Optional[str] = None
     license_plate: Optional[str] = None
+    current_odometer: Optional[float] = None
+    insurance_expiry: Optional[datetime] = None
+    fitness_certificate_expiry: Optional[datetime] = None
     is_active: Optional[bool] = None
 
 
