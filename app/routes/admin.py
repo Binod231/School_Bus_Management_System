@@ -226,6 +226,7 @@ async def create_guardian_with_students(
             "first_name": guardian_user.first_name,
             "last_name": guardian_user.last_name,
             "phone": guardian_user.phone,
+            "profile_picture_url": guardian_user.profile_picture_url,
             "fcm_token": guardian.fcm_token or "",
             "created_at": guardian.created_at,
             "updated_at": guardian.updated_at,
@@ -281,6 +282,7 @@ async def list_guardians(
             "first_name": guardian.user.first_name,
             "last_name": guardian.user.last_name,
             "phone": guardian.user.phone,
+            "profile_picture_url": guardian.user.profile_picture_url,
             "fcm_token": guardian.fcm_token,
             "created_at": guardian.created_at,
             "updated_at": guardian.updated_at,
@@ -352,6 +354,7 @@ async def get_guardian(
         "first_name": guardian.user.first_name,
         "last_name": guardian.user.last_name,
         "phone": guardian.user.phone,
+        "profile_picture_url": guardian.user.profile_picture_url,
         # 'is_active' and other fields might be on the user or guardian model
         "is_active": guardian.user.is_active, 
         "created_at": guardian.created_at,
@@ -781,6 +784,7 @@ async def update_guardian_with_students(
             "first_name": guardian_user.first_name,
             "last_name": guardian_user.last_name,
             "phone": guardian_user.phone,
+            "profile_picture_url": guardian_user.profile_picture_url,
             "fcm_token": updated_guardian.fcm_token,
             "created_at": updated_guardian.created_at,
             "updated_at": updated_guardian.updated_at,
@@ -814,6 +818,98 @@ async def delete_guardian_user(
     await delete_guardian_by_user_id(db, guardian_user_id)
     await delete_user(db, guardian_user_id)
     return {"detail": "Guardian deleted"}
+
+
+@router.post(
+    "/guardians/{guardian_id}/profile-picture",
+    response_model=GuardianResponse,
+    summary="Upload guardian profile picture"
+)
+async def upload_guardian_profile_picture(
+    guardian_id: int,
+    file: UploadFile = File(...),
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_admin)
+):
+    try:
+        guardian = await get_guardian_by_id(db, guardian_id)
+    except NotFoundException:
+        raise HTTPException(status_code=404, detail="Guardian not found")
+
+    guardian_user = await get_user_by_id(db, guardian.user_id)
+    if not guardian_user or guardian_user.school_id != current_user.school_id:
+        raise HTTPException(status_code=403, detail="You do not have permission to manage this guardian")
+
+    delete_old_profile_picture(guardian_user.profile_picture_url)
+    url = await save_profile_picture(file)
+    guardian_user.profile_picture_url = url
+    await db.commit()
+    await db.refresh(guardian_user)
+
+    student_count_result = await db.execute(
+        select(func.count(GuardianStudent.id)).where(GuardianStudent.guardian_id == guardian.id)
+    )
+    student_count = student_count_result.scalar() or 0
+
+    return {
+        "id": guardian.id,
+        "user_id": guardian_user.id,
+        "email": guardian_user.email,
+        "first_name": guardian_user.first_name,
+        "last_name": guardian_user.last_name,
+        "phone": guardian_user.phone,
+        "profile_picture_url": guardian_user.profile_picture_url,
+        "fcm_token": guardian.fcm_token,
+        "created_at": guardian.created_at,
+        "updated_at": guardian.updated_at,
+        "is_active": guardian_user.is_active,
+        "student_count": student_count,
+    }
+
+
+@router.delete(
+    "/guardians/{guardian_id}/profile-picture",
+    response_model=GuardianResponse,
+    summary="Remove guardian profile picture"
+)
+async def delete_guardian_profile_picture(
+    guardian_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_admin)
+):
+    try:
+        guardian = await get_guardian_by_id(db, guardian_id)
+    except NotFoundException:
+        raise HTTPException(status_code=404, detail="Guardian not found")
+
+    guardian_user = await get_user_by_id(db, guardian.user_id)
+    if not guardian_user or guardian_user.school_id != current_user.school_id:
+        raise HTTPException(status_code=403, detail="You do not have permission to manage this guardian")
+
+    delete_old_profile_picture(guardian_user.profile_picture_url)
+    guardian_user.profile_picture_url = None
+    await db.commit()
+    await db.refresh(guardian_user)
+
+    student_count_result = await db.execute(
+        select(func.count(GuardianStudent.id)).where(GuardianStudent.guardian_id == guardian.id)
+    )
+    student_count = student_count_result.scalar() or 0
+
+    return {
+        "id": guardian.id,
+        "user_id": guardian_user.id,
+        "email": guardian_user.email,
+        "first_name": guardian_user.first_name,
+        "last_name": guardian_user.last_name,
+        "phone": guardian_user.phone,
+        "profile_picture_url": None,
+        "fcm_token": guardian.fcm_token,
+        "created_at": guardian.created_at,
+        "updated_at": guardian.updated_at,
+        "is_active": guardian_user.is_active,
+        "student_count": student_count,
+    }
 
 
 @router.put(
@@ -1491,7 +1587,8 @@ async def get_all_bus_locations(
                 "status": ts.status,
                 "boarded_at": ts.boarded_at,
                 "guardian_name": guardian_name,
-                "guardian_phone": guardian_phone
+                "guardian_phone": guardian_phone,
+                "profile_picture_url": ts.student.profile_picture_url if ts.student else None
             })
 
         response_data.append({

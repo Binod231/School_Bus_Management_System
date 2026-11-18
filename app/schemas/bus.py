@@ -190,6 +190,7 @@ class StudentRosterEntry(BaseModel):
     boarded_at: Optional[datetime] = None
     guardian_name: Optional[str] = None
     guardian_phone: Optional[str] = None
+    profile_picture_url: Optional[str] = None
 
 
 class ActiveBusLocation(BaseModel):
