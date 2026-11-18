@@ -16,7 +16,7 @@ from app.schemas.trip import (
     TripStatusEnum
 )
 from app.schemas.student import StudentResponse
-from app.schemas.bus import BusResponse, BusRouteResponse
+from app.schemas.bus import BusResponse, BusRouteResponse, BusRouteStopResponse
 from app.services.trip import (
     create_trip, get_driver_trips, get_trip_by_id, update_trip,
     get_trip_students, update_trip_student, create_location_update,
@@ -35,7 +35,7 @@ from app.services.notification import (
     notify_guardians_incident
 )
 from app.utils.qrcode import verify_student_qr_code
-from app.services.bus import get_bus_by_id, get_bus_route_by_id, get_bus_drivers, get_buses, get_bus_routes
+from app.services.bus import get_bus_by_id, get_bus_route_by_id, get_bus_drivers, get_buses, get_bus_routes, get_bus_route_stops
 from app.core.exceptions import NotFoundException, InvalidDataException
 from app.models.trip import StudentStatus, TripStudent, TripDirection, Trip
 from app.models.incident import Incident, IncidentType, IncidentStatus
@@ -183,6 +183,26 @@ async def list_routes_for_driver(
 ):
     routes = await get_bus_routes(db, school_id=current_user.school_id)
     return routes
+
+
+@router.get(
+    "/routes/{route_id}/stops",
+    response_model=List[BusRouteStopResponse],
+    summary="List stops for a route",
+    description="Retrieves the sequential bus stops for a given route."
+)
+async def list_route_stops_for_driver(
+    route_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_driver)
+):
+    try:
+        route = await get_bus_route_by_id(db, route_id)
+        if route.school_id != current_user.school_id:
+            raise HTTPException(status_code=403, detail="Unauthorized")
+        return await get_bus_route_stops(db, route_id)
+    except NotFoundException as e:
+        raise HTTPException(status_code=404, detail=str(e))
 
 
 @router.post(

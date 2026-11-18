@@ -139,6 +139,7 @@ class BusRouteStopResponse(BusRouteStopBase):
     route_id: int
     stop_id: int
     created_at: datetime
+    stop: Optional[BusStopResponse] = None
 
     class Config:
         from_attributes = True
