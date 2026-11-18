@@ -39,7 +39,7 @@ from app.services.incident import get_incidents, create_incident, update_inciden
 from app.schemas.incident import IncidentResponse, IncidentUpdate, IncidentCreate
 from sqlalchemy.orm import selectinload, Session, joinedload
 from app.models.student import Guardian
-from app.services.student import get_guardian_students, get_students_by_bus_route
+from app.services.student import get_guardian_students, get_students_by_bus_route, get_student_guardians
 from app import models, services, schemas
 from app.services.notification import notify_guardians_incident
 from app.utils.qrcode import generate_student_qr_code
@@ -1260,12 +1260,11 @@ async def generate_qr_for_student(
                 detail="Failed to generate QR code."
             )
 
-        # CORRECTED LINE: Call update_student with named arguments to ensure correct order
-        updated_student = await update_student(
-            student_id=student_id, 
-            student_data=StudentUpdate(qr_code=qr_code_string), 
+        # Call update_student_service with db, student_id, and student_data
+        updated_student = await update_student_service(
             db=db,
-            current_user=current_user # Pass the current_user as well
+            student_id=student_id, 
+            student_data=StudentUpdate(qr_code=qr_code_string)
         )
         
         return updated_student
