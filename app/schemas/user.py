@@ -36,9 +36,25 @@ class UserUpdate(BaseModel):
     assigned_students: Optional[List[int]] = []
     skipped_students: Optional[List[int]] = []
 
+class UserSchoolResponse(BaseModel):
+    id: int
+    name: str
+    address: Optional[str] = None
+    city: Optional[str] = None
+    state: Optional[str] = None
+    phone: Optional[str] = None
+    email: Optional[str] = None
+    logo_url: Optional[str] = None
+
+    class Config:
+        from_attributes = True
+
+
 class UserResponse(UserBase):
     id: int
     school_id: Optional[int] = None
+    school_name: Optional[str] = None
+    school: Optional[UserSchoolResponse] = None
     is_active: bool
     license_number: Optional[str] = None
     license_expiry: Optional[date] = None

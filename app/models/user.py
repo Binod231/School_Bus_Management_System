@@ -1,4 +1,5 @@
 import enum
+from typing import Optional
 from sqlalchemy import Column, Integer, String, Boolean, Enum, DateTime, ForeignKey
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
@@ -28,7 +29,11 @@ class User(Base):
     
     # School association (except for superadmin)
     school_id = Column(Integer, ForeignKey("schools.id"), nullable=True)
-    school = relationship("School", back_populates="users")
+    school = relationship("School", back_populates="users", lazy="selectin")
+
+    @property
+    def school_name(self) -> Optional[str]:
+        return self.school.name if self.school else None
     
     # Driver specific fields
     license_number = Column(String, nullable=True)

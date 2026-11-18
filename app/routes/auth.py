@@ -1,6 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException, status, Query, UploadFile, File
 from fastapi.security import OAuth2PasswordRequestForm
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import select
 from datetime import timedelta, datetime
 import uuid
 import json
@@ -226,10 +227,32 @@ async def logout(
     return {"message": "Logged out successfully"}
 
 @router.get("/users/me", response_model=UserResponse)
-async def read_users_me(current_user: User = Depends(get_current_active_user)):
+async def read_users_me(
+    current_user: User = Depends(get_current_active_user),
+    db: AsyncSession = Depends(get_db)
+):
     """
-    Get current logged-in user.
+    Get current logged-in user with school details.
     """
+    if not current_user.school and current_user.role == UserRole.GUARDIAN:
+        from app.models.student import Guardian, GuardianStudent, Student
+        from sqlalchemy.orm import selectinload
+        guardian = await db.scalar(
+            select(Guardian)
+            .where(Guardian.user_id == current_user.id)
+            .options(
+                selectinload(Guardian.students)
+                .selectinload(GuardianStudent.student)
+                .selectinload(Student.school)
+            )
+        )
+        if guardian and guardian.students:
+            for gs in guardian.students:
+                if gs.student and gs.student.school:
+                    current_user.school = gs.student.school
+                    current_user.school_id = gs.student.school.id
+                    break
+
     return current_user
 
 
