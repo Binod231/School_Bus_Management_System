@@ -168,3 +168,38 @@ async def send_notification_email(email: str, student_name: str, event_type: str
     """
     body = get_eduride_template("Student Status Update", content, action_url, "Open Dashboard")
     await send_email(email, subject, body)
+
+
+async def send_broadcast_announcement_email(
+    email: str,
+    title: str,
+    message: str,
+    category: str = "ANNOUNCEMENT",
+    redirect_path: str = "/guardian/dashboard"
+):
+    """Send dedicated festival, holiday, session, or emergency broadcast announcement email without transit/student tracking boilerplate"""
+    category_clean = (category or "ANNOUNCEMENT").upper()
+    category_headers = {
+        "FESTIVAL": "Festival Greeting",
+        "SESSION": "Academic Session Notice",
+        "HOLIDAY": "School Holiday Notice",
+        "EMERGENCY": "Urgent Announcement"
+    }
+    header_title = category_headers.get(category_clean, "School Announcement")
+    subject = title
+
+    action_url = get_frontend_url(redirect_path)
+    formatted_message = message.replace("\n", "<br>")
+
+    content = f"""
+        <p>Dear EDURIDE Community,</p>
+        <div style="background-color: #f0f7ff; border-left: 4px solid #1a73e8; padding: 22px 24px; border-radius: 8px; margin: 25px 0;">
+            <h3 style="margin: 0 0 12px 0; color: #1a73e8; font-size: 20px;">{title}</h3>
+            <p style="margin: 0; color: #37474f; font-size: 16px; line-height: 1.7;">{formatted_message}</p>
+        </div>
+        <p style="color: #607d8b; font-size: 14px;">
+            Thank you for being part of our school community.
+        </p>
+    """
+    body = get_eduride_template(header_title, content, action_url, "Visit EDURIDE Portal")
+    await send_email(email, subject, body)

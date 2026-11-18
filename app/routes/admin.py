@@ -1832,12 +1832,13 @@ async def broadcast_custom_notification(
 
     # 4. Send Emails (if requested)
     if notification_data.send_email and unique_emails:
+        from app.utils.email import send_broadcast_announcement_email
         for email in unique_emails:
-            await send_notification_email(
+            await send_broadcast_announcement_email(
                 email=email,
-                student_name="All Students",
-                event_type=notification_data.title,
-                details=notification_data.message,
+                title=notification_data.title,
+                message=notification_data.message,
+                category=notification_data.category or "FESTIVAL",
                 redirect_path="/guardian/dashboard"
             )
 
