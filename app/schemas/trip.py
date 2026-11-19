@@ -1,4 +1,4 @@
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 from typing import Optional, List
 from datetime import datetime
 from enum import Enum
@@ -36,7 +36,30 @@ class TripBase(BaseModel):
     status: TripStatusEnum = TripStatusEnum.scheduled
     scheduled_start: datetime
     scheduled_end: datetime
-    
+
+    @field_validator('type', mode='before')
+    @classmethod
+    def normalize_type(cls, v):
+        if isinstance(v, str):
+            v_upper = v.upper()
+            if v_upper == "EVENING":
+                return TripTypeEnum.special
+            return v_upper
+        return v
+
+    @field_validator('direction', mode='before')
+    @classmethod
+    def normalize_direction(cls, v):
+        if isinstance(v, str):
+            return v.upper()
+        return v
+
+    @field_validator('status', mode='before')
+    @classmethod
+    def normalize_status(cls, v):
+        if isinstance(v, str):
+            return v.upper()
+        return v
 
 
 class TripCreate(TripBase):
@@ -54,6 +77,30 @@ class TripUpdate(BaseModel):
     scheduled_end: Optional[datetime] = None
     actual_start: Optional[datetime] = None
     actual_end: Optional[datetime] = None
+
+    @field_validator('type', mode='before')
+    @classmethod
+    def normalize_type(cls, v):
+        if isinstance(v, str):
+            v_upper = v.upper()
+            if v_upper == "EVENING":
+                return TripTypeEnum.special
+            return v_upper
+        return v
+
+    @field_validator('direction', mode='before')
+    @classmethod
+    def normalize_direction(cls, v):
+        if isinstance(v, str):
+            return v.upper()
+        return v
+
+    @field_validator('status', mode='before')
+    @classmethod
+    def normalize_status(cls, v):
+        if isinstance(v, str):
+            return v.upper()
+        return v
 
 class TripStudentBase(BaseModel):
     status: StudentStatusEnum = StudentStatusEnum.at_home
